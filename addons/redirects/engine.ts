@@ -67,6 +67,8 @@ export interface RedirectPlan {
   problems: string[];
   zoneChoices: { zone: string; connectionId: string; zoneId: string; label: string }[];
   held?: true;
+  /** The real CloudPanel site at a host this redirect answers for, which replaces it. */
+  replacedBy?: string;
 }
 
 export interface TrackedRedirectRule {
@@ -111,6 +113,17 @@ interface RecordOp {
 
 interface PlaceholderDiff {
   ops: RecordOp[];
+  problems: string[];
+}
+
+type FoundRule = { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] };
+
+/** What removing a redirect deletes: its Cloudflare rule, its placeholder records, and its stand-in site. */
+export interface Removal {
+  rule: FoundRule | null;
+  records: { ref: ZoneRef; record: CfRecord }[];
+  standIn: boolean;
+  changes: Change[];
   problems: string[];
 }
 
@@ -193,6 +206,9 @@ export class RedirectsRun {
   /** The selected zone, for redirects whose last plan found a rule there. */
   private readonly seen = new Map<string, ZoneRef>();
   private hostOwners: Map<string, string[]> | null = null;
+  private readonly removals = new Map<string, Removal>();
+  /** Redirects removed in this run because a site replaced them, by source, with that site. */
+  readonly replaced = new Map<string, string>();
   private readonly cloudflareBackoff: { until: number };
   private readonly held: Set<string>;
   private readonly redirects: Map<string, Redirect>;
@@ -345,6 +361,10 @@ export class RedirectsRun {
     for (const domain of domains) {
       const redirect = this.redirects.get(domain);
       if (!redirect) continue;
+      if (this.replacingSite(redirect)) {
+        for (const ref of this.deletionRefs(domain, this.context.tracked?.[domain])) refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
+        continue;
+      }
       const resolved = this.resolve(redirect);
       if (resolved.kind !== "zone") continue;
       refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
@@ -400,6 +420,11 @@ export class RedirectsRun {
     if (resolved.kind === "zone") return redirectHosts(redirect.source, resolved.ref.zone.name);
     if (resolved.kind === "choose") return redirectHosts(redirect.source, resolved.name);
     return this.standInHostsFor(redirect);
+  }
+
+  /** The real CloudPanel site at `redirect`'s source or at a host it answers for. */
+  replacingSite(redirect: Redirect): string | null {
+    return [redirect.source, ...this.effectiveHosts(redirect)].find((host) => this.context.siteDomains.has(host)) ?? null;
   }
 
   /** One problem per other redirect that answers for any of `redirect`'s hosts. */
@@ -458,13 +483,18 @@ export class RedirectsRun {
     };
     this.diffs.delete(redirect.source);
     this.seen.delete(redirect.source);
-    if (this.held.has(redirect.source)) plan.held = true;
-    const served = this.effectiveHosts(redirect);
-    const sites = [redirect.source, ...served].filter((host, index, all) => all.indexOf(host) === index && this.context.siteDomains.has(host));
-    if (sites.length) {
-      plan.problems.push(`CloudPanel has a site ${sites.join(" and ")}; delete the site or this redirect`);
+    const site = this.replacingSite(redirect);
+    if (site) {
+      const removal = this.removal(redirect.source, true);
+      this.removals.set(redirect.source, removal);
+      plan.replacedBy = site;
+      plan.zone = removal.rule?.zone ?? null;
+      plan.changes.push(...removal.changes);
+      plan.problems.push(...removal.problems, ...this.failures.get(redirect.source) ?? []);
       return plan;
     }
+    if (this.held.has(redirect.source)) plan.held = true;
+    const served = this.effectiveHosts(redirect);
     plan.problems.push(...this.overlaps(redirect, served));
     plan.problems.push(...this.failures.get(redirect.source) ?? []);
 
@@ -559,7 +589,7 @@ export class RedirectsRun {
     const allowed = scope ? new Set(scope) : null;
     const plans: RedirectPlan[] = [];
     for (const redirect of this.context.policy.redirects) {
-      if (allowed && !allowed.has(redirect.source)) continue;
+      if ((allowed && !allowed.has(redirect.source)) || this.replaced.has(redirect.source)) continue;
       plans.push(this.planRedirect(redirect));
     }
     return plans;
@@ -596,6 +626,10 @@ export class RedirectsRun {
       .filter((plan) => plan.mode === "enforce" && !plan.problems.length && !plan.held && scope.has(plan.domain));
     for (const plan of targets) {
       const redirect = this.redirects.get(plan.domain)!;
+      if (plan.replacedBy) {
+        await this.enforceReplacement(redirect);
+        continue;
+      }
       if (!plan.zone) {
         await this.enforceStandIn(redirect);
         continue;
@@ -613,6 +647,20 @@ export class RedirectsRun {
       } catch (error) {
         this.fail(redirect.source, error);
       }
+    }
+  }
+
+  private async enforceReplacement(redirect: Redirect): Promise<void> {
+    const fresh = this.planRedirect(redirect);
+    const removal = this.removals.get(redirect.source);
+    if (!fresh.replacedBy || fresh.problems.length || !removal) return;
+    const detail = `Replaced by the site ${fresh.replacedBy}`;
+    try {
+      await this.remove(redirect.source, removal, detail);
+      this.replaced.set(redirect.source, fresh.replacedBy);
+      this.logged([redirect.source], "", "delete", "Redirect", detail);
+    } catch (error) {
+      this.fail(redirect.source, error);
     }
   }
 
@@ -765,7 +813,7 @@ export class RedirectsRun {
   redirectRuleOf(
     source: string,
     tracked?: TrackedRedirectRule,
-  ): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
+  ): FoundRule | { problem: string } | null {
     const redirect = this.redirects.get(source);
     if (!redirect) return null;
     const failure = this.discoveryFailure();
@@ -781,7 +829,7 @@ export class RedirectsRun {
       };
     }
 
-    const hits: { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] }[] = [];
+    const hits: FoundRule[] = [];
     for (const ref of this.deletionRefs(source, tracked)) {
       const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
       if (!state?.rulesetLoaded || state.error) return { problem: state?.error ?? `${ref.zone.name} could not be read` };
@@ -795,10 +843,69 @@ export class RedirectsRun {
     return hits[0] ?? null;
   }
 
-  async deleteRedirectRule(source: string, zoneId: string, rulesetId: string, ruleId: string, connectionId?: string, detail = `${source}: the redirect domain was deleted`): Promise<void> {
-    const ref = this.zoneRefs.find((candidate) => candidate.zone.id === zoneId && (!connectionId || candidate.connectionId === connectionId))!;
-    await this.apis.get(ref.connectionId)!.deleteRule(zoneId, REDIRECT_PHASE, rulesetId, ruleId);
-    this.logged([source], ref.zone.name, "delete", "Cloudflare redirect rule", detail);
+  /**
+   * What removing `source` deletes, from zones `loadRedirectDeletion` or `load`
+   * read: its rule, its placeholder records when `placeholders`, and its stand-in.
+   * A rule that cannot be read leaves a problem and nothing to delete.
+   */
+  removal(source: string, placeholders: boolean): Removal {
+    const tracked = this.context.tracked?.[source];
+    const standIn = Boolean(this.context.standIns?.current[source]);
+    const removal: Removal = { rule: null, records: [], standIn, changes: [], problems: [] };
+    const found = this.redirectRuleOf(source, tracked);
+    if (found && "problem" in found) {
+      removal.problems.push(found.problem);
+      return removal;
+    }
+    if (found) {
+      removal.rule = found;
+      const params = found.rule.action_parameters as {
+        from_value?: { status_code?: number; target_url?: { value?: string; expression?: string } };
+      } | undefined;
+      const fromValue = params?.from_value;
+      const target = fromValue?.target_url?.value ?? fromValue?.target_url?.expression ?? "";
+      const summary = fromValue?.status_code && target ? `${fromValue.status_code} to ${target}` : found.rule.description || found.rule.expression;
+      removal.changes.push({ action: "delete", subject: "Cloudflare redirect rule", detail: summary });
+    }
+    if (placeholders) {
+      for (const ref of this.deletionRefs(source, tracked)) {
+        const hosts = new Set(redirectHosts(source, ref.zone.name));
+        const records = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id))?.records ?? [];
+        for (const record of records) {
+          if (record.type !== "AAAA" || !hosts.has(record.name) || canonicalIpv6(record.content) !== PLACEHOLDER || !record.proxied) continue;
+          removal.records.push({ ref, record });
+          removal.changes.push({ action: "delete", subject: `${record.type} ${record.name}`, detail: describeWebRecord(record) });
+        }
+      }
+    }
+    if (standIn) {
+      const hosts = this.context.standIns!.current[source]!.hosts ?? standInHosts(source);
+      removal.changes.push({ action: "delete", subject: "Stand-in site", detail: `Static site on this server for ${hosts.join(" and ")}` });
+    }
+    return removal;
+  }
+
+  /** Deletes what `removal` lists: the rule first, so a failure leaves the redirect whole. Never touches a site Redirects does not own. */
+  async remove(source: string, removal: Removal, detail: string): Promise<void> {
+    if (removal.rule) {
+      const { zone, rulesetId, rule } = removal.rule;
+      await this.apis.get(zone.connectionId)!.deleteRule(zone.id, REDIRECT_PHASE, rulesetId, rule.id);
+      const state = this.zones.get(zoneMapKey(zone.connectionId, zone.id));
+      if (state?.ruleset) state.ruleset = { ...state.ruleset, rules: state.ruleset.rules.filter((entry) => entry.id !== rule.id) };
+      this.logged([source], zone.name, "delete", "Cloudflare redirect rule", detail);
+    }
+    for (const { ref, record } of removal.records) {
+      await this.apis.get(ref.connectionId)!.deleteRecord(ref.zone.id, record.id);
+      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
+      if (state?.records) state.records = state.records.filter((entry) => entry.id !== record.id);
+      this.logged([source], ref.zone.name, "delete", `${record.type} ${record.name}`, detail);
+    }
+    const standIns = this.context.standIns;
+    if (removal.standIn && standIns?.current[source]) {
+      await standIns.remove(source);
+      delete standIns.current[source];
+      this.logged([source], "", "delete", "Stand-in site", detail);
+    }
   }
 
   /** Whole-host redirect rules in every Cloudflare zone the connections reach, each zone read through its first connection. */

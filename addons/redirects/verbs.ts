@@ -5,7 +5,6 @@ export const REDIRECTS_VERBS = {
   "set-automatic": { web: "admin" },
   "save-redirect": { web: "admin" },
   "delete-redirect": { web: "admin" },
-  "prepare-replace": { web: "admin" },
   "review-redirect": { web: "admin" },
   confirm: { web: "admin" },
   "find-redirects": { web: "admin" },
@@ -15,4 +14,5 @@ export const REDIRECTS_VERBS = {
   "remove-connection": { web: "admin" },
   "create-site-helper": { web: "admin" },
   reconcile: { web: false, why: "the full check, run by the worker repair queues" },
+  "sync-sites": { web: false, why: "run by the new-sites watcher when CloudPanel creates a site" },
 } as const;

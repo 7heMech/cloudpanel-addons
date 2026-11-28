@@ -3,7 +3,7 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { CreateSiteHelper, RedirectsReply } from "../action";
 
 const SLOW = new Set<WebVerb<"redirects">>([
-  "check", "confirm", "save-redirect", "delete-redirect", "prepare-replace", "review-redirect",
+  "check", "confirm", "save-redirect", "delete-redirect", "review-redirect",
   "find-redirects", "take-over", "save-connection", "remove-connection",
 ]);
 

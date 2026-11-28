@@ -119,7 +119,6 @@ redirects:create-site-helper       admin
 redirects:delete-redirect          admin
 redirects:find-redirects           admin
 redirects:list                     admin
-redirects:prepare-replace          admin
 redirects:remove-connection        admin
 redirects:review-redirect          admin
 redirects:save-connection          admin

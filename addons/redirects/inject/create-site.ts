@@ -7,9 +7,9 @@ export const NATIVE_SITE_TYPES = ["wordpress", "php", "static", "nodejs", "pytho
 
 /**
  * Injected before the Create button row on CloudPanel's six native Create Site
- * forms, restricted to administrators via Twig. Keeps zero `name` attributes so
- * Symfony never rejects undeclared fields, and never intercepts form submission
- * or silently deletes redirects.
+ * forms, restricted to administrators via Twig. Only informs: keeps zero `name`
+ * attributes so Symfony never rejects undeclared fields, and never intercepts
+ * form submission.
  */
 export function createSiteRedirectSnippet(addonUrl: string): string {
   return `

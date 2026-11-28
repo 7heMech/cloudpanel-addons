@@ -8,7 +8,6 @@ const CHANGES: Record<string, WebVerb<"redirects">> = {
   "/api/automatic": "set-automatic",
   "/api/redirects": "save-redirect",
   "/api/redirects/delete": "delete-redirect",
-  "/api/redirects/prepare-replace": "prepare-replace",
   "/api/redirects/review": "review-redirect",
   "/api/redirects/find": "find-redirects",
   "/api/redirects/take-over": "take-over",

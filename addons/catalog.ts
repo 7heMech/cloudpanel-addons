@@ -19,14 +19,15 @@ import { SECURITY_KEYS_ADDON } from "./security-keys/addon";
 
 /**
  * Order is the order addons are listed and installed, and the order their
- * new-site work runs in: core server and security addons first, with DNS before
- * SMTP Relay. Keep it deliberate.
+ * new-site work runs in: core server and security addons first, with Redirects
+ * before DNS, so a site that replaces a redirect gets its DNS at once, and DNS
+ * before SMTP Relay. Keep it deliberate.
  */
 const DEFINITIONS: AddonDefinition[] = [
   SYSTEM_TWEAKS_ADDON,
   FIREWALL_ADDON,
-  DNS_ADDON,
   REDIRECTS_ADDON,
+  DNS_ADDON,
   SECURITY_KEYS_ADDON,
   PANEL_TWEAKS_ADDON,
   RESOURCE_LIMITS_ADDON,

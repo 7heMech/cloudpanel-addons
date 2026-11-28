@@ -209,11 +209,9 @@ function createSitePage(redirects: Partial<CreateSiteHelper["redirects"][number]
   };
   const script = readFileSync(join(REPO, "addons/redirects/inject/create-site.client.js"), "utf8");
   new Function("document", "fetch", script)(document, fetch);
-  const button = (label: string) => [box, ...body.children].flatMap((node) => [node, ...node.descendants()])
-    .find((node) => node.tag === "button" && node.textContent === label && !node.hidden);
-  const dialog = () => body.children.find((node) => node.tag === "dialog")!;
+  const dialogs = () => body.children.filter((node) => node.tag === "dialog");
   return {
-    box, input, calls, dialog, button,
+    box, input, calls, dialogs,
     settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
     type(value: string) { input.value = value; input.fire("input"); },
   };
@@ -239,19 +237,25 @@ function setup() {
     rootUid: process.getuid!(),
     clpctl: "/bin/false",
   };
+  const options = () => ({
+    paths,
+    processUid: 0,
+    fetch: cf.fetch,
+    sites: () => sites,
+    addresses: () => ({ ipv4: "46.225.220.253", ipv6: "2a01:4f8:c2c:ec6::1" }),
+    issue: async () => false,
+    standIns: () => standIns,
+  });
   const env = {
-    dir, cf, account, sites, standIns, paths,
+    dir, cf, account, sites, standIns, paths, options,
     async act<T = RedirectsReply>(verb: string, body?: unknown): Promise<T> {
       return await executeRedirectsAction([verb], {
-        paths,
-        processUid: 0,
+        ...options(),
         input: body === undefined ? undefined : JSON.stringify(body),
-        fetch: cf.fetch,
-        sites: () => sites,
-        addresses: () => ({ ipv4: "46.225.220.253", ipv6: "2a01:4f8:c2c:ec6::1" }),
-        issue: async () => false,
-        standIns: () => standIns,
       }) as T;
+    },
+    placeholders(domain: string): string[] {
+      return cf.recordsOf(domain).filter((record) => record.type === "AAAA" && record.content === "100::").map((record) => String(record.name));
     },
     async confirmed(reply: RedirectsReply): Promise<RedirectsReply> {
       if (!reply.review) return reply;
@@ -287,7 +291,7 @@ describe("addon boundaries, model validation, and admin enforcement", () => {
     expect(REDIRECTS_ADDON.changed?.length).toBeGreaterThan(0);
 
     for (const [verb, spec] of Object.entries(REDIRECTS_VERBS)) {
-      if (verb === "reconcile") expect(spec.web).toBe(false);
+      if (verb === "reconcile" || verb === "sync-sites") expect(spec.web).toBe(false);
       else expect(spec.web).toBe("admin");
     }
   });
@@ -501,14 +505,10 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     await env.automatic();
 
     env.sites.push({ id: 7, domain: "www.example.com", user: "www", selfSigned: false });
-    const onSite = await env.act("save-redirect", found("example.com", "https://example.net"));
-    expect(onSite.review!.blocked).toBe(true);
-    expect(onSite.review!.sites[0]!.problems).toEqual(["CloudPanel has a site www.example.com; delete the site or this redirect"]);
+    await expect(env.act("save-redirect", found("example.com", "https://example.net"))).rejects.toThrow("www.example.com is a CloudPanel site");
+    await expect(env.act("take-over", { redirects: [found("example.com", "https://example.net")] })).rejects.toThrow("www.example.com is a CloudPanel site");
     const local = await env.act("save-redirect", { ...found("local.example", "https://example.net"), mode: "local" });
     expect(local.review!.blocked).toBe(false);
-    env.sites.push({ id: 8, domain: "www.local.example", user: "wwwlocal", selfSigned: false });
-    expect((await env.act("save-redirect", { ...found("local.example", "https://example.net"), mode: "local" })).review!.sites[0]!.problems)
-      .toEqual(["CloudPanel has a site www.local.example; delete the site or this redirect"]);
     env.sites.splice(0);
 
     const overlapping = await env.act("take-over", { redirects: [found("example.com", "https://a.example"), found("www.example.com", "https://b.example")] });
@@ -529,7 +529,7 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     expect(later.review!.sites[0]!.problems).toContain("www.example.com and example.com both answer for www.example.com; keep only one of these redirects");
   });
 
-  test("blocks replacement while another enabled rule's pattern still matches the host", async () => {
+  test("blocks deletion while another enabled rule's pattern still matches the host", async () => {
     expect(patternMatchesHost('http.request.full_uri wildcard "https://*.example.com/*"', "old.example.com")).toBe(true);
     expect(patternMatchesHost('http.request.full_uri wildcard "https://*.other.com/*"', "old.example.com")).toBe(false);
     expect(patternMatchesHost('http.host wildcard "*.example.com"', "example.com")).toBe(false);
@@ -546,10 +546,10 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     const rules = env.cf.rulesets.get(`${zone.id}:http_request_dynamic_redirect`)!.rules;
     const wildcard = externalRule('http.request.full_uri wildcard "https://*.example.com/*"', "https://example.org");
     rules.push({ ...wildcard, enabled: false }, externalRule('http.request.full_uri wildcard "https://*.other.com/*"', "https://example.org"));
-    expect((await env.act("prepare-replace", { source: "old.example.com" })).review!.blocked).toBe(false);
+    expect((await env.act("delete-redirect", { source: "old.example.com" })).review!.blocked).toBe(false);
 
     rules.push(wildcard);
-    const blocked = await env.act("prepare-replace", { source: "old.example.com" });
+    const blocked = await env.act("delete-redirect", { source: "old.example.com" });
     expect(blocked.review!.blocked).toBe(true);
     expect(blocked.review!.sites[0]!.problems.join(" ")).toContain("A rule in Cloudflare also matches old.example.com by pattern");
     expect((await env.act("save-redirect", found("old.example.com", "https://example.com"))).review!.blocked).toBe(true);
@@ -702,12 +702,12 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect(auto.review!.sites[0]!.zone).toBeNull();
     expect(auto.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
 
-    const replace = await env.act("prepare-replace", { source: "loc.sub.example.com" });
+    const replace = await env.act("delete-redirect", { source: "loc.sub.example.com" });
     expect(replace.review!.blocked).toBe(true);
     expect(replace.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
   });
 
-  test("replacement inspects the tracked zone beside the selected one and blocks when the tracked zone is out of reach", async () => {
+  test("deletion inspects the tracked zone beside the selected one and blocks when the tracked zone is out of reach", async () => {
     const env = setup();
     env.cf.zone("example.com", env.account);
     env.cf.zone("other.example", env.account);
@@ -722,13 +722,13 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     env.cf.rulesets.set(`${child.id}:http_request_dynamic_redirect`, {
       id: hexId(), rules: [externalRule('http.host eq "go.sub.example.com"', "https://example.net")],
     });
-    const both = await env.act("prepare-replace", { source: "go.sub.example.com" });
+    const both = await env.act("delete-redirect", { source: "go.sub.example.com" });
     expect(both.review!.blocked).toBe(true);
     expect(both.review!.sites[0]!.problems.join(" ")).toContain("exist in more than one zone (sub.example.com, example.com)");
 
     // The token stops listing the tracked zone: no match is not the same as no rule.
     env.cf.zones = env.cf.zones.filter((zone) => zone.name !== "other.example");
-    const gone = await env.act("prepare-replace", { source: "go.other.example" });
+    const gone = await env.act("delete-redirect", { source: "go.other.example" });
     expect(gone.review!.blocked).toBe(true);
     expect(gone.review!.sites[0]!.problems.join(" ")).toContain("other.example, where the Cloudflare rule for go.other.example was last seen, is not reachable");
   });
@@ -748,7 +748,7 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect(checked.redirects[0]!.plan!.zone!.name).toBe("sub.example.com");
     expect(tracked()?.zoneName).toBe("example.com");
 
-    const replace = await env.act("prepare-replace", { source: "go.sub.example.com" });
+    const replace = await env.act("delete-redirect", { source: "go.sub.example.com" });
     expect(replace.review!.blocked).toBe(false);
     expect(replace.review!.sites[0]!.zone!.name).toBe("example.com");
     expect(replace.review!.sites[0]!.changes).toContainEqual(expect.objectContaining({ action: "delete", subject: "Cloudflare redirect rule" }));
@@ -934,93 +934,151 @@ esac
   });
 });
 
-describe("Create Site replacement flow and silent-deletion protection", () => {
-  test("never silently deletes a redirect when a real CloudPanel site is created at its domain", async () => {
+describe("a CloudPanel site replaces a redirect", () => {
+  test("in Automatic, the new-sites hook removes the redirect's rule, placeholders and stand-in at once, and nothing else", async () => {
     const env = setup();
-    seededZone(env.cf, env.account, "clash.example", "https://example.com");
+    const nonWeb = seededZone(env.cf, env.account, "clash.example", "https://example.com");
     await env.act("save-connection", { token: TOKEN });
     await env.automatic();
     await env.confirmed(await env.act("take-over", { redirects: [found("clash.example", "https://example.com")] }));
+    await env.confirmed(await env.act("save-redirect", { ...found("old.example", "https://example.com"), mode: "local" }));
+    expect(env.placeholders("clash.example").sort()).toEqual(["clash.example", "www.clash.example"]);
+    expect(env.standIns.current["old.example"]).toBeDefined();
 
-    // A CloudPanel site is created directly without replacing the redirect.
-    env.sites.push({ id: 42, domain: "clash.example", user: "clash", selfSigned: false });
-    const checked = await env.act("check");
-    expect(env.redirectRules("clash.example")).toHaveLength(1);
-    expect(checked.redirects[0]!.plan!.problems.join(" ")).toContain("CloudPanel has a site clash.example");
-    await expect(env.act("save-redirect", found("clash.example", "https://other.example"))).rejects.toThrow("clash.example is a CloudPanel site");
+    env.sites.push({ id: 42, domain: "www.clash.example", user: "clash", selfSigned: false });
+    env.sites.push({ id: 43, domain: "www.old.example", user: "old", selfSigned: false });
+    const line = await REDIRECTS_ADDON.newSites!.run(env.options() as Record<string, unknown>);
+    expect(line).toBe("removed clash.example, old.example, replaced by new sites");
+
+    expect(env.redirectRules("clash.example")).toEqual([]);
+    expect(env.placeholders("clash.example")).toEqual([]);
+    for (const record of nonWeb) expect(env.cf.recordsOf("clash.example").map((r) => JSON.stringify(r))).toContain(record);
+    expect(env.standIns.calls).toContain("remove old.example");
+    expect(env.sites.map((site) => site.domain).sort()).toEqual(["www.clash.example", "www.old.example"]);
+    const listed = await env.act("list");
+    expect(listed.redirects).toEqual([]);
+    expect(listed.log).toContainEqual(expect.objectContaining({
+      sites: ["clash.example"], subject: "Redirect", detail: "Replaced by the site www.clash.example", cause: "New site",
+    }));
+    expect(listed.log).toContainEqual(expect.objectContaining({
+      sites: ["clash.example"], subject: "Cloudflare redirect rule", detail: "Replaced by the site www.clash.example",
+    }));
   });
 
-  test("create-site-helper reads local state without calling Cloudflare, and prepare-replace + confirm removes CF rule and/or stand-in while keeping non-web DNS", async () => {
+  test("the new-sites hook makes no Cloudflare call when no new site touches a redirect", async () => {
     const env = setup();
-    const nonWeb = seededZone(env.cf, env.account, "replace-cf.example", "https://example.com");
+    seededZone(env.cf, env.account, "quiet.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("quiet.example", "https://example.com")] }));
+    env.sites.push({ id: 50, domain: "unrelated.example", user: "unrelated", selfSigned: false });
+    env.sites.push({ id: 51, domain: "shop.quiet.example", user: "shop", selfSigned: false });
+    const calls = env.cf.calls.length;
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: [] });
+    expect(env.cf.calls.length).toBe(calls);
+    expect(env.redirectRules("quiet.example")).toHaveLength(1);
+  });
+
+  test("in Ask first, the removal waits as a pending change until Automatic is turned on", async () => {
+    const env = setup();
+    seededZone(env.cf, env.account, "ask.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("ask.example", "https://example.com")] }));
+    await env.act("set-automatic", { automatic: false });
+
+    env.sites.push({ id: 44, domain: "ask.example", user: "ask", selfSigned: false });
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: ["ask.example"] });
+    await env.act("check");
+    expect(env.redirectRules("ask.example")).toHaveLength(1);
+    const plan = (await env.act("list")).redirects[0]!.plan!;
+    expect(plan.replacedBy).toBe("ask.example");
+    expect(plan.problems).toEqual([]);
+    expect(plan.changes.map((change) => `${change.action} ${change.subject}`)).toEqual([
+      "delete Cloudflare redirect rule", "delete AAAA ask.example", "delete AAAA www.ask.example",
+    ]);
+
+    const review = await env.act("set-automatic", { automatic: true });
+    expect(review.review!.sites[0]!.replacedBy).toBe("ask.example");
+    const applied = await env.confirmed(review);
+    expect(applied.automatic).toBe(true);
+    expect(applied.redirects).toEqual([]);
+    expect(env.redirectRules("ask.example")).toEqual([]);
+    expect(env.placeholders("ask.example")).toEqual([]);
+    expect(env.sites.map((site) => site.domain)).toEqual(["ask.example"]);
+  });
+
+  test("keeps the redirect and reports a problem while its rule cannot be read or conflicts", async () => {
+    const env = setup();
+    seededZone(env.cf, env.account, "keep.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("keep.example", "https://example.com")] }));
+    env.sites.push({ id: 45, domain: "keep.example", user: "keep", selfSigned: false });
+
+    env.cf.tokens.get(TOKEN)!.status = "disabled";
+    const unreadable = await env.act("check");
+    expect(unreadable.redirects[0]!.plan!.problems.join(" ")).toContain("Cloudflare could not be read");
+    expect(env.redirectRules("keep.example")).toHaveLength(1);
+
+    env.cf.tokens.get(TOKEN)!.status = "active";
+    env.redirectRules("keep.example").push(externalRule(apexHosts("keep.example"), "https://other.example"));
+    const conflicted = await env.act("check");
+    expect(conflicted.redirects[0]!.plan!.problems.join(" ")).toContain("2 redirect rules");
+    expect(env.redirectRules("keep.example")).toHaveLength(2);
+    expect(env.placeholders("keep.example")).toHaveLength(2);
+
+    env.redirectRules("keep.example").pop();
+    const replaced = await env.act("check");
+    expect(replaced.redirects).toEqual([]);
+    expect(env.redirectRules("keep.example")).toEqual([]);
+    expect(env.sites).toEqual([{ id: 45, domain: "keep.example", user: "keep", selfSigned: false }]);
+  });
+
+  test("deleting a redirect in Ask first reviews and removes its Cloudflare rule, and blocks while Cloudflare cannot be read", async () => {
+    const env = setup();
+    const nonWeb = seededZone(env.cf, env.account, "gone.example", "https://example.com");
+    seededZone(env.cf, env.account, "stuck.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", {
+      redirects: [found("gone.example", "https://example.com"), found("stuck.example", "https://example.com")],
+    }));
+    await env.act("set-automatic", { automatic: false });
+
+    const review = await env.act("delete-redirect", { source: "gone.example" });
+    expect(review.review).toMatchObject({ blocked: false, confirmLabel: "Delete redirect", danger: true });
+    expect(review.review!.sites[0]!.changes).toEqual([expect.objectContaining({ action: "delete", subject: "Cloudflare redirect rule" })]);
+    expect(env.redirectRules("gone.example")).toHaveLength(1);
+    const deleted = await env.act("confirm", { token: review.review!.token });
+    expect(deleted.redirects.map((redirect) => redirect.source)).toEqual(["stuck.example"]);
+    expect(env.redirectRules("gone.example")).toEqual([]);
+    for (const record of nonWeb) expect(env.cf.recordsOf("gone.example").map((r) => JSON.stringify(r))).toContain(record);
+
+    env.cf.tokens.get(TOKEN)!.status = "disabled";
+    const blocked = await env.act("delete-redirect", { source: "stuck.example" });
+    expect(blocked.review).toMatchObject({ blocked: true, token: "" });
+    expect((await env.act("list")).redirects.map((redirect) => redirect.source)).toEqual(["stuck.example"]);
+    expect(env.redirectRules("stuck.example")).toHaveLength(1);
+  });
+
+  test("create-site-helper reads local state without calling Cloudflare", async () => {
+    const env = setup();
+    seededZone(env.cf, env.account, "replace-cf.example", "https://example.com");
     await env.act("save-connection", { token: TOKEN });
     await env.automatic();
     await env.confirmed(await env.act("take-over", { redirects: [found("replace-cf.example", "https://example.com")] }));
-    await env.confirmed(await env.act("save-redirect", {
-      source: "replace-local.example", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "local",
-    }));
+    await env.confirmed(await env.act("save-redirect", { ...found("replace-local.example", "https://example.com"), mode: "local" }));
 
-    // create-site-helper makes zero Cloudflare calls.
-    const cfCallsBefore = env.cf.calls.length;
+    const calls = env.cf.calls.length;
     const helper = await env.act<CreateSiteHelper>("create-site-helper");
-    expect(env.cf.calls.length).toBe(cfCallsBefore);
+    expect(env.cf.calls.length).toBe(calls);
+    expect(helper.automatic).toBe(true);
     expect(helper.redirects.map((r) => `${r.source}:${r.servedBy}:${r.standIn}`)).toEqual([
       "replace-cf.example:cloudflare:false",
       "replace-local.example:stand-in:true",
     ]);
     expect(helper.redirects[0]!.hosts).toEqual(["replace-cf.example", "www.replace-cf.example"]);
-
-    // Replace the Cloudflare-backed redirect via prepare-replace -> confirm.
-    const cfPlan = await env.act("prepare-replace", { source: "replace-cf.example" });
-    expect(cfPlan.review).toMatchObject({ blocked: false, confirmLabel: "Replace redirect", danger: true });
-    expect(cfPlan.review!.sites[0]!.changes).toContainEqual(expect.objectContaining({
-      action: "delete", subject: "Cloudflare redirect rule",
-    }));
-    expect(env.redirectRules("replace-cf.example")).toHaveLength(1);
-    await env.act("confirm", { token: cfPlan.review!.token });
-    expect(env.redirectRules("replace-cf.example")).toEqual([]);
-    for (const record of nonWeb) expect(env.cf.recordsOf("replace-cf.example").map((r) => JSON.stringify(r))).toContain(record);
-
-    // Replace the local stand-in redirect via prepare-replace -> confirm (even in Ask-first mode).
-    await env.act("set-automatic", { automatic: false });
-    const localPlan = await env.act("prepare-replace", { source: "replace-local.example" });
-    expect(localPlan.review!.blocked).toBe(false);
-    expect(localPlan.review!.sites[0]!.changes).toContainEqual(expect.objectContaining({
-      action: "delete", subject: "Stand-in site",
-    }));
-    expect(env.standIns.current["replace-local.example"]).toBeDefined();
-    await env.act("confirm", { token: localPlan.review!.token });
-    expect(env.standIns.current["replace-local.example"]).toBeUndefined();
-    expect((await env.act("list")).redirects).toEqual([]);
-  });
-
-  test("prepare-replace removes BOTH leftover Cloudflare rule and local stand-in and catches drift before confirm", async () => {
-    const env = setup();
-    await env.automatic();
-    await env.confirmed(await env.act("save-redirect", found("dual.example", "https://example.com")));
-    const nonWeb = seededZone(env.cf, env.account, "dual.example", "https://example.com");
-    await env.act("save-connection", { token: TOKEN });
-
-    const prepared = await env.act("prepare-replace", { source: "dual.example" });
-    expect(prepared.review!.blocked).toBe(false);
-    expect(prepared.review!.sites[0]!.changes.map((c) => c.subject).sort()).toEqual([
-      "Cloudflare redirect rule", "Stand-in site",
-    ]);
-
-    // Mutate the Cloudflare rule before confirming -> confirm catches digest drift and returns a fresh review.
-    env.redirectRules("dual.example")[0]!.action_parameters = {
-      from_value: { status_code: 302, target_url: { value: "https://changed.example" }, preserve_query_string: false },
-    };
-    const drifted = await env.act("confirm", { token: prepared.review!.token });
-    expect(drifted.review).toBeDefined();
-    expect(env.redirectRules("dual.example")).toHaveLength(1);
-    expect(env.standIns.current["dual.example"]).toBeDefined();
-
-    // Confirming the fresh review deletes both and preserves non-web DNS records.
-    await env.act("confirm", { token: drifted.review!.token });
-    expect(env.redirectRules("dual.example")).toEqual([]);
-    expect(env.standIns.current["dual.example"]).toBeUndefined();
-    for (const record of nonWeb) expect(env.cf.recordsOf("dual.example").map((r) => JSON.stringify(r))).toContain(record);
   });
 
   test("Create Site injection targets all six native templates, gates on ROLE_ADMIN, adds no named fields, and never intercepts submit", () => {
@@ -1041,61 +1099,28 @@ describe("Create Site replacement flow and silent-deletion protection", () => {
     expect(script).not.toMatch(/\.setAttribute\(['"]name['"]/);
   });
 
-  test("Create Site helper binds a replacement review and its result to the redirect that requested them", async () => {
-    const review = (source: string) => ({ review: { token: `t-${source}`, title: `Replace redirect for ${source}`, text: "", sites: [], blocked: false, confirmLabel: "Replace redirect" } });
+  test("Create Site helper only informs: it says the site replaces the redirect and offers no action", async () => {
     const page = createSitePage([
       { source: "a.example", target: "https://x.example", hosts: ["a.example", "www.a.example"], standIn: false, servedBy: "cloudflare", zone: "a.example" },
-      { source: "b.example", target: "https://y.example", hosts: ["b.example"], standIn: true, servedBy: "stand-in", zone: null },
+      { source: "b.example", target: "https://y.example", hosts: ["b.example", "www.b.example"], standIn: true, servedBy: "stand-in", zone: null },
     ]);
     await page.settle();
-    page.type("a.example");
-    page.button("Replace redirect with this site")!.fire("click");
-    await page.settle();
-    expect(page.calls[0]!.body).toEqual({ source: "a.example" });
-
-    // The field moved on to b.example before a.example's review arrived: it is dropped.
-    page.type("b.example");
-    page.calls[0]!.resolve(review("a.example"));
-    await page.settle();
-    expect(page.dialog().open).toBe(false);
-
-    page.button("Replace redirect with this site")!.fire("click");
-    await page.settle();
-    page.calls[1]!.resolve(review("b.example"));
-    await page.settle();
-    expect(page.dialog().open).toBe(true);
-    page.button("Replace redirect")!.fire("click");
-    await page.settle();
-    expect(page.calls[2]!.body).toEqual({ token: "t-b.example" });
-
-    // A reply that does not name the removed redirect shows no success.
-    page.calls[2]!.resolve({ replaced: "a.example" });
-    await page.settle();
-    expect(page.dialog().open).toBe(true);
-    expect(page.box.textContent).not.toContain("Redirect removed");
-    page.button("Replace redirect")!.fire("click");
-    await page.settle();
-    page.calls[3]!.resolve({ replaced: "b.example" });
-    await page.settle();
-    expect(page.dialog().open).toBe(false);
-    expect(page.box.textContent).toContain("The redirect for b.example was removed");
-
-    // Success follows only hosts the removed redirect covered; an alias of a removed redirect counts.
     page.type("www.a.example");
-    expect(page.box.textContent).toContain("is covered by the redirect on a.example");
-    page.button("Replace redirect with this site")!.fire("click");
-    await page.settle();
-    page.calls[4]!.resolve(review("a.example"));
-    await page.settle();
-    page.button("Replace redirect")!.fire("click");
-    await page.settle();
-    page.calls[5]!.resolve({ replaced: "a.example" });
-    await page.settle();
-    expect(page.box.textContent).toContain("The redirect for a.example was removed");
-    page.type("a.example");
-    expect(page.box.textContent).toContain("Redirect removed");
+    expect(page.box.hidden).toBe(false);
+    expect(page.box.textContent).toContain("www.a.example is covered by the redirect on a.example to https://x.example.");
+    expect(page.box.textContent).toContain("Creating this site replaces the redirect: its Cloudflare rule and any stand-in site are removed.");
+    page.type("www.b.example");
+    expect(page.box.textContent).toContain("Creating this site replaces the redirect");
+    page.type("b.example");
+    expect(page.box.textContent).toContain("Its stand-in site already uses this domain on this server, so delete the redirect in Redirects before creating the site.");
+    expect(page.box.descendants().some((node) => node.tag === "button" || node.tag === "dialog")).toBe(false);
+    expect(page.dialogs()).toEqual([]);
     page.type("c.example");
     expect(page.box.hidden).toBe(true);
+    expect(page.calls).toEqual([]);
+    const script = readFileSync(join(REPO, "addons/redirects/inject/create-site.client.js"), "utf8");
+    expect(script).not.toContain("prepare-replace");
+    expect(script).not.toContain("method: 'POST'");
   });
 
   test("Create Site helper builds every URL from its fixed mount path, never from the page's markup", async () => {

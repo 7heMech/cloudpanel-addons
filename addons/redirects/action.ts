@@ -4,9 +4,10 @@
  * contains a token.
  *
  * Changes that alter what Redirects writes once it is Automatic -- turning that
- * on, editing redirects, releasing holds, deleting Cloudflare rules, and
- * replacing a redirect from CloudPanel's Create Site form -- are reviewed first
- * and applied only on confirmation of that exact plan digest.
+ * on, editing redirects, releasing holds, and deleting a redirect whose rule may
+ * be in Cloudflare -- are reviewed first and applied only on confirmation of
+ * that exact plan digest. A CloudPanel site at a redirect's host replaces it
+ * without a review once Redirects is Automatic.
  */
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
@@ -32,7 +33,7 @@ import { panelUserUid } from "../../lib/sso-auth";
 import { isStandInSite } from "../../lib/stand-ins";
 import { trustedText } from "../../lib/trusted-file";
 import {
-  RedirectsRun, type Change, type LogEntry, type RedirectPlan, type TrackedRedirectRule,
+  RedirectsRun, type LogEntry, type RedirectPlan, type Removal, type TrackedRedirectRule,
 } from "./engine";
 import {
   cloudflareId, connectionId, emptyPolicy, hostname, parsePolicy, parseRedirect, parseRedirects,
@@ -48,7 +49,7 @@ import { REDIRECTS_VERBS } from "./verbs";
 type RedirectsVerb = keyof typeof REDIRECTS_VERBS;
 
 const VERBS = Object.keys(REDIRECTS_VERBS) as RedirectsVerb[];
-const NO_BODY: RedirectsVerb[] = ["list", "check", "find-redirects", "create-site-helper", "reconcile"];
+const NO_BODY: RedirectsVerb[] = ["list", "check", "find-redirects", "create-site-helper", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
 const MAX_LOG = 1000;
@@ -149,7 +150,6 @@ export type RedirectsReply = RedirectsState & {
   notice?: string;
   error?: string;
   found?: Found;
-  replaced?: string;
 };
 
 export interface CreateSiteRedirectEntry {
@@ -167,7 +167,6 @@ export interface CreateSiteRedirectEntry {
 export interface CreateSiteHelper {
   redirects: CreateSiteRedirectEntry[];
   automatic: boolean;
-  hasCloudflare: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +191,6 @@ interface Pending {
   policy?: Policy;
   /** Deleting a redirect from the Redirects page. */
   deleteSource?: string;
-  /** Replacing a redirect from CloudPanel's Create Site form. */
-  replaceSource?: string;
 }
 
 const emptyStatus = (): Status => ({ checkedAt: null, plans: {} });
@@ -442,8 +439,6 @@ class Action {
     const policy = this.files.policy();
     const status = this.files.status();
     const standIns = this.standIns().current;
-    const cfConnections = readCloudflareConnections(this.files.cfPaths);
-    const hasCloudflare = cfConnections.length > 0;
     const redirects: CreateSiteRedirectEntry[] = policy.redirects.map((redirect) => {
       const plan = status.plans[redirect.source];
       const standIn = standIns[redirect.source];
@@ -473,10 +468,10 @@ class Action {
         zone: zoneName,
       };
     });
-    return { redirects, automatic: policy.automatic, hasCloudflare };
+    return { redirects, automatic: policy.automatic };
   }
 
-  reply(extra: { review?: Review; notice?: string; error?: string; found?: Found; replaced?: string } = {}): RedirectsReply {
+  reply(extra: { review?: Review; notice?: string; error?: string; found?: Found } = {}): RedirectsReply {
     this.writeLog();
     return { ...this.state(), ...extra };
   }
@@ -588,6 +583,7 @@ class Action {
       this.files.savePolicy(policy);
     }
     await run.enforce(allSources);
+    this.forget([...run.replaced.keys()]);
     const plans = run.planAll();
     await this.record(run, plans, "all");
     if (retryCerts) await this.retryStandInCertificates();
@@ -603,6 +599,7 @@ class Action {
     const standIns = this.standIns().current;
     const moving = policy.redirects.filter((redirect) => {
       if (!sources.includes(redirect.source) || redirect.mode === "local" || policy.held.includes(redirect.source)) return false;
+      if (run.replacingSite(redirect)) return false;
       const before = status.plans[redirect.source];
       if (standIns[redirect.source]) return !before?.zone && Boolean(run.planRedirect(redirect).zone);
       const wasCloudflare = before?.zone
@@ -681,6 +678,11 @@ class Action {
     await run.discover();
     await run.load(domains);
     const plans = run.planAll(domains);
+    for (const plan of plans) {
+      if (plan.replacedBy && !before.redirects.some((redirect) => redirect.source === plan.domain)) {
+        plan.problems.push(`CloudPanel has a site ${plan.replacedBy}; delete the site or this redirect`);
+      }
+    }
     const blocked = plans.some((plan) => plan.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
@@ -715,108 +717,56 @@ class Action {
     });
   }
 
-  private deletionDigest(plans: RedirectPlan[], found: ReturnType<RedirectsRun["redirectRuleOf"]>): string {
-    const rule = found && "rule" in found ? {
-      id: found.rule.id,
-      ref: found.rule.ref,
-      expression: found.rule.expression,
-      action_parameters: found.rule.action_parameters,
-      description: found.rule.description,
-      enabled: found.rule.enabled,
-    } : null;
-    return hash([this.digest(plans), rule]);
-  }
-
-  /** Reads live Cloudflare state and owned stand-in state for deleting or replacing `source`. */
-  private async deletionPlan(
-    source: string,
-    includeStandInChange: boolean,
-  ): Promise<{ run: RedirectsRun; found: ReturnType<RedirectsRun["redirectRuleOf"]>; standIn: boolean; plans: RedirectPlan[]; digest: string }> {
+  /** Reads live Cloudflare state and owned stand-in state for deleting `source`. */
+  private async deletionPlan(source: string): Promise<{ run: RedirectsRun; removal: Removal; replacedBy: string | null; plans: RedirectPlan[]; digest: string }> {
     const policy = this.files.policy();
+    const redirect = policy.redirects.find((candidate) => candidate.source === source)!;
     const tracked = this.files.status().redirectRules?.[source];
-    const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
-    const standIns = this.standIns();
-    const standIn = standIns.current[source];
     const run = this.run(policy);
-    let found: ReturnType<RedirectsRun["redirectRuleOf"]> = null;
-    if (hasCf || tracked) {
+    if (readCloudflareConnections(this.files.cfPaths).length || tracked) {
       await run.discover();
       await run.loadRedirectDeletion(source, tracked);
-      found = run.redirectRuleOf(source, tracked);
     }
-    const changes: Change[] = [];
-    if (found && "rule" in found) {
-      const params = found.rule.action_parameters as {
-        from_value?: { status_code?: number; target_url?: { value?: string; expression?: string } };
-      } | undefined;
-      const fromValue = params?.from_value;
-      const target = fromValue?.target_url?.value ?? fromValue?.target_url?.expression ?? "";
-      const summary = fromValue?.status_code && target
-        ? `${fromValue.status_code} to ${target}`
-        : found.rule.description || found.rule.expression;
-      changes.push({ action: "delete", subject: "Cloudflare redirect rule", detail: summary });
-    }
-    if (includeStandInChange && standIn) {
-      const hosts = standIn.hosts ?? standInHosts(source);
-      changes.push({ action: "delete", subject: "Stand-in site", detail: `Static site on this server for ${hosts.join(" and ")}` });
-    }
+    const replacedBy = run.replacingSite(redirect);
+    const removal = run.removal(source, replacedBy !== null);
     const plans: RedirectPlan[] = [{
       domain: source,
       mode: "enforce",
-      zone: found && "zone" in found ? found.zone : null,
-      problems: found && "problem" in found ? [found.problem] : [],
+      zone: removal.rule?.zone ?? null,
+      problems: removal.problems,
       zoneChoices: [],
-      changes,
+      changes: removal.changes,
+      ...replacedBy && { replacedBy },
     }];
-    return { run, found, standIn: Boolean(standIn), plans, digest: this.deletionDigest(plans, found) };
-  }
-
-  async deleteRedirect(source: string): Promise<RedirectsReply> {
-    const policy = this.files.policy();
-    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
-    const standIn = Boolean(this.standIns().current[source]);
-    const tracked = this.files.status().redirectRules?.[source];
-    const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
-    if (policy.automatic && (hasCf || tracked)) {
-      const { plans, digest } = await this.deletionPlan(source, false);
-      if (plans[0]!.changes.length || plans[0]!.problems.length) {
-        const token = plans[0]!.problems.length ? "" : randomBytes(24).toString("hex");
-        this.files.savePending(token ? {
-          token,
-          expiresAt: this.now + REVIEW_LIFETIME,
-          base: hash(policy),
-          digest,
-          domains: [],
-          deleteSource: source,
-        } : null);
-        return this.reply({
-          review: {
-            token,
-            title: `Delete the redirect for ${source}`,
-            text: token
-              ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting. ${standIn ? "Its stand-in site is deleted too. " : ""}DNS records stay untouched so mail and verification records are preserved.`
-              : "This cannot be deleted while its rule cannot be read. Fix the problem, or delete the rule in Cloudflare.",
-            sites: plans,
-            blocked: !token,
-            confirmLabel: "Delete redirect",
-            danger: true,
-          },
-        });
-      }
-    }
-    return this.dropRedirect(source, "Redirect deleted", standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed.`);
+    const rule = removal.rule && {
+      id: removal.rule.rule.id,
+      ref: removal.rule.rule.ref,
+      expression: removal.rule.rule.expression,
+      action_parameters: removal.rule.rule.action_parameters,
+      description: removal.rule.rule.description,
+      enabled: removal.rule.rule.enabled,
+    };
+    const digest = hash([this.digest(plans), rule, removal.records.map(({ record }) => record.id)]);
+    return { run, removal, replacedBy, plans, digest };
   }
 
   /**
-   * Prepares an explicit one-click confirmation plan for CloudPanel's Create
-   * Site form to replace an existing redirect (Cloudflare rule and/or local
-   * stand-in site) before creating a site at the same domain.
+   * With Cloudflare connected, or a rule seen before, deleting always shows a
+   * review of what it removes there, whether or not Redirects is Automatic, and
+   * blocks while the rule cannot be read.
    */
-  async prepareReplace(source: string, notice?: string): Promise<RedirectsReply> {
+  async deleteRedirect(source: string, notice?: string): Promise<RedirectsReply> {
     const policy = this.files.policy();
-    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction(`No redirect exists for ${source}`);
-    const { found, standIn, plans, digest } = await this.deletionPlan(source, true);
-    const blocked = plans[0]!.problems.length > 0;
+    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
+    const tracked = this.files.status().redirectRules?.[source];
+    const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
+    const { run, removal, replacedBy, plans, digest } = await this.deletionPlan(source);
+    if (!hasCf && !tracked) {
+      await run.remove(source, removal, replacedBy ? `Replaced by the site ${replacedBy}` : "The redirect domain was deleted");
+      this.forget([source]);
+      return this.reply({ notice: removal.standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed.` });
+    }
+    const blocked = removal.problems.length > 0;
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
       token,
@@ -824,85 +774,86 @@ class Action {
       base: hash(policy),
       digest,
       domains: [],
-      replaceSource: source,
+      deleteSource: source,
     });
-    const hasRule = Boolean(found && "rule" in found);
-    const removedParts = [
-      hasRule && "its Cloudflare Single Redirect rule",
-      standIn && "its local stand-in site on this server",
-    ].filter(Boolean);
-    const summary = removedParts.length
-      ? `Removes ${removedParts.join(" and ")} and stops managing ${source} in Redirects.`
-      : `Removes ${source} from Redirects so you can create the site cleanly.`;
+    const parts = [
+      removal.rule ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting.` : "No Cloudflare rule was found for it.",
+      removal.records.length ? "Its placeholder records are deleted." : "",
+      removal.standIn ? "Its stand-in site is deleted." : "",
+      "Other DNS records stay untouched.",
+    ];
     return this.reply({
       notice,
       review: {
         token,
-        title: blocked ? "Resolve these first" : `Replace redirect for ${source}`,
+        title: `Delete the redirect for ${source}`,
         text: blocked
-          ? "The redirect cannot be replaced while Cloudflare cannot be checked cleanly. Resolve the issue below or remove the rule in Cloudflare first."
-          : `${summary} Non-web DNS records (such as mail and verification records) are not touched.`,
+          ? "This cannot be deleted while its rule cannot be read. Fix the problem, or delete the rule in Cloudflare."
+          : parts.filter(Boolean).join(" "),
         sites: plans,
         blocked,
-        confirmLabel: "Replace redirect",
+        confirmLabel: "Delete redirect",
         danger: true,
       },
     });
   }
 
-  private async dropRedirect(source: string, cause: string, notice: string, replaced?: string): Promise<RedirectsReply> {
+  /** Forgets redirects that are gone, in policy and status. */
+  private forget(sources: string[]): void {
+    if (!sources.length) return;
+    const gone = new Set(sources);
     const policy = this.files.policy();
-    const standIns = this.standIns();
-    const standIn = standIns.current[source];
-    if (standIn) {
-      await standIns.remove(source);
-      this.files.appendLog([{
-        at: new Date(this.now).toISOString(),
-        sites: [source],
-        zone: "",
-        action: "delete",
-        subject: "Stand-in site",
-        detail: replaced ? "Replaced by new site" : "The redirect domain was deleted",
-        cause,
-      }]);
-    }
-    const next = structuredClone(policy);
-    next.redirects = next.redirects.filter((redirect) => redirect.source !== source);
-    next.held = next.held.filter((domain) => domain !== source);
-    this.files.savePolicy(next);
+    policy.redirects = policy.redirects.filter((redirect) => !gone.has(redirect.source));
+    policy.held = policy.held.filter((domain) => !gone.has(domain));
+    this.files.savePolicy(policy);
     const status = this.files.status();
-    delete status.plans[source];
-    if (status.redirectRules) delete status.redirectRules[source];
+    for (const source of gone) {
+      delete status.plans[source];
+      if (status.redirectRules) delete status.redirectRules[source];
+    }
     this.files.saveStatus(status);
-    return this.reply({ notice, ...(replaced ? { replaced } : {}) });
   }
 
-  private async confirmDeletion(pending: Pending, replacing: boolean): Promise<RedirectsReply> {
-    const source = replacing ? pending.replaceSource! : pending.deleteSource!;
-    const { run, found, digest } = await this.deletionPlan(source, replacing);
+  private async confirmDeletion(pending: Pending): Promise<RedirectsReply> {
+    const source = pending.deleteSource!;
+    const { run, removal, replacedBy, digest } = await this.deletionPlan(source);
     if (digest !== pending.digest) {
-      return replacing
-        ? this.prepareReplace(source, "Cloudflare or local state changed after the plan was shown. Review the updated plan below.")
-        : this.deleteRedirect(source);
+      return this.deleteRedirect(source, "Cloudflare or this server changed after the plan was shown. This is the plan now.");
     }
     this.files.savePending(null);
-    this.cause = replacing ? "Replaced by new site" : "Redirect deleted";
-    if (found && "rule" in found) {
-      await run.deleteRedirectRule(
-        source,
-        found.zone.id,
-        found.rulesetId,
-        found.rule.id,
-        found.zone.connectionId,
-        replacing ? `${source}: replaced by new site` : `${source}: the redirect domain was deleted`,
-      );
-    }
-    return this.dropRedirect(
-      source,
-      this.cause,
-      replacing ? `Redirect for ${source} removed. You can create the site now.` : `Deleted the redirect for ${source}.`,
-      replacing ? source : undefined,
-    );
+    this.cause = "Redirect deleted";
+    await run.remove(source, removal, replacedBy ? `Replaced by the site ${replacedBy}` : "The redirect domain was deleted");
+    this.forget([source]);
+    return this.reply({ notice: `Deleted the redirect for ${source}.` });
+  }
+
+  /** Redirects whose source, `www`, or stand-in hosts a real site now uses; a superset of those a site replaces. */
+  siteCandidates(policy = this.files.policy()): string[] {
+    const sites = new Set(this.sites(true).map((site) => site.domain));
+    return policy.redirects
+      .filter((redirect) => [redirect.source, `www.${redirect.source}`, ...redirect.hosts ?? []].some((host) => sites.has(host)))
+      .map((redirect) => redirect.source);
+  }
+
+  /**
+   * Run when CloudPanel creates a site: a redirect the site replaces is removed
+   * now once Redirects is Automatic, and shown as waiting otherwise. Makes no
+   * Cloudflare call when no new site touches a redirect.
+   */
+  async syncSites(): Promise<{ replaced: string[]; waiting: string[] }> {
+    const policy = this.files.policy();
+    const candidates = this.siteCandidates(policy);
+    if (!candidates.length) return { replaced: [], waiting: [] };
+    this.cause = "New site";
+    const run = this.run(policy);
+    await run.discover();
+    await run.load(candidates);
+    const replacing = run.planAll(candidates).filter((plan) => plan.replacedBy).map((plan) => plan.domain);
+    if (policy.automatic) await run.enforce(replacing);
+    const replaced = [...run.replaced.keys()];
+    this.forget(replaced);
+    await this.record(run, run.planAll(candidates), candidates);
+    return { replaced, waiting: replacing.filter((source) => !run.replaced.has(source)) };
   }
 
   async confirm(token: unknown): Promise<RedirectsReply> {
@@ -914,8 +865,7 @@ class Action {
     if (pending.base !== hash(current)) {
       failAction("The settings changed after this review; make the change again to see a fresh plan");
     }
-    if (pending.deleteSource) return this.confirmDeletion(pending, false);
-    if (pending.replaceSource) return this.confirmDeletion(pending, true);
+    if (pending.deleteSource) return this.confirmDeletion(pending);
 
     const next = parsePolicy(pending.policy);
     const run = this.run(next);
@@ -929,6 +879,7 @@ class Action {
     this.files.savePending(null);
     this.cause = "Confirmed review";
     await run.enforce(pending.domains);
+    this.forget([...run.replaced.keys()]);
     const afterPlans = run.planAll(pending.domains);
     await this.record(run, afterPlans, pending.domains);
     return this.reply({
@@ -940,17 +891,17 @@ class Action {
   // Redirect management & shared Cloudflare connections
   // -------------------------------------------------------------------------
 
-  private refuseSite(source: string): void {
-    if (this.sites().some((site) => site.domain === source)) {
-      failAction(`${source} is a CloudPanel site; delete the site first`);
-    }
+  private refuseSite(redirect: Redirect): void {
+    const hosts = new Set([redirect.source, ...standInHosts(redirect.source), ...redirect.hosts ?? []]);
+    const site = this.sites().find((candidate) => hosts.has(candidate.domain));
+    if (site) failAction(`${site.domain} is a CloudPanel site; delete the site first`);
   }
 
   async saveRedirect(body: Record<string, unknown>): Promise<RedirectsReply> {
     const policy = this.files.policy();
     const redirect = parseRedirect(body);
     const existing = policy.redirects.find((candidate) => candidate.source === redirect.source);
-    this.refuseSite(redirect.source);
+    this.refuseSite(redirect);
     // Preserve custom stand-in hosts across edits unless explicitly provided or switching away from local.
     if (!body.hosts && existing?.hosts && redirect.mode === "local") redirect.hosts = existing.hosts;
     const next = structuredClone(policy);
@@ -987,7 +938,7 @@ class Action {
       if (policy.redirects.some((candidate) => candidate.source === redirect.source)) {
         failAction(`${redirect.source} is already a redirect domain`);
       }
-      this.refuseSite(redirect.source);
+      this.refuseSite(redirect);
     }
     const next = structuredClone(policy);
     next.redirects = parseRedirects([...next.redirects, ...added]);
@@ -1022,6 +973,8 @@ async function perform(action: Action, verb: RedirectsVerb, body: Record<string,
     case "reconcile":
       await action.check(true);
       return { checked: action.files.policy().redirects.length };
+    case "sync-sites":
+      return action.syncSites();
     case "set-automatic": {
       if (typeof body.automatic !== "boolean") failAction("Say whether Redirects is Automatic");
       const next = structuredClone(action.files.policy());
@@ -1033,8 +986,6 @@ async function perform(action: Action, verb: RedirectsVerb, body: Record<string,
     case "delete-redirect":
       action.cause = "Redirect deleted";
       return action.deleteRedirect(hostname(body.source, "the redirect's domain"));
-    case "prepare-replace":
-      return action.prepareReplace(hostname(body.source, "the redirect's domain"));
     case "review-redirect":
       return action.reviewRedirect(hostname(body.source, "the redirect's domain"));
     case "confirm":
@@ -1072,6 +1023,7 @@ export async function executeRedirectsAction(argv: string[], options: RedirectsA
   const action = new Action(paths, options);
   if (verb === "list") return action.state();
   if (verb === "create-site-helper") return action.createSiteHelper();
+  if (verb === "sync-sites" && (!existsSync(paths.configFile) || !action.siteCandidates().length)) return { replaced: [], waiting: [] };
 
   const wait = verb === "reconcile" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "Redirects is busy checking Cloudflare; try again in a moment", async () => {

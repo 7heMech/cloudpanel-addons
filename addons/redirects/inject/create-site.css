@@ -1,73 +1,17 @@
-/* Create Site redirect replacement notice and confirmation modal on CloudPanel's Create Site forms.
-   Works with both light and html.dark themes without altering native form inputs. */
+/* Create Site redirect notice on CloudPanel's Create Site forms, in both light and html.dark themes. */
 .clp-redir-cs[hidden] { display: none; }
 .clp-redir-cs { margin: 8px 0 16px; }
 .clp-redir-cs-alert {
-  display: flex; flex-direction: column; gap: 10px; max-width: 100%; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 6px; max-width: 100%; box-sizing: border-box;
   margin-bottom: 0; font-size: 14px; line-height: 1.45;
 }
 .clp-redir-cs-lead { overflow-wrap: anywhere; }
 .clp-redir-cs-target { font-size: 13px; overflow-wrap: anywhere; color: inherit; background: rgba(0, 0, 0, .06); padding: 1px 5px; border-radius: 3px; }
 .clp-redir-cs-note { font-size: 13px; opacity: .9; }
-.clp-redir-cs-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
-.clp-redir-cs-btn { white-space: nowrap; }
-a.clp-redir-cs-link { font-size: 13px; text-decoration: underline; color: inherit; }
-.clp-redir-cs-inline-error { margin-top: 8px; margin-bottom: 0; font-size: 13px; }
-
-.clp-redir-cs-dialog {
-  width: min(560px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
-  padding: 0;
-  border: 1px solid #dee2e6;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #212529;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
-}
-.clp-redir-cs-dialog::backdrop { background: rgba(0, 0, 0, .45); }
-.clp-redir-cs-dialog-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 18px; border-bottom: 1px solid #dee2e6;
-}
-.clp-redir-cs-dialog-head h5 { margin: 0; font-size: 16px; font-weight: 600; }
-.clp-redir-cs-dialog-body { padding: 16px 18px; overflow-y: auto; max-height: calc(100vh - 180px); }
-.clp-redir-cs-dialog-text { margin: 0 0 12px; font-size: 14px; }
-.clp-redir-cs-dialog-error { margin: 0 0 12px; }
-.clp-redir-cs-dialog-error[hidden] { display: none; }
-.clp-redir-cs-changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.clp-redir-cs-changes li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.45; }
-.clp-redir-cs-change-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
-.clp-redir-cs-badge {
-  flex: 0 0 auto; display: inline-block; padding: 2px 7px; border-radius: 4px;
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em;
-}
-.clp-redir-cs-badge-create { background: rgba(25, 135, 84, .14); color: #146c43; }
-.clp-redir-cs-badge-update { background: rgba(13, 110, 253, .14); color: #0a58ca; }
-.clp-redir-cs-badge-delete { background: rgba(220, 53, 69, .14); color: #b02a37; }
-.clp-redir-cs-badge-note { background: rgba(108, 117, 125, .14); color: #495057; }
-.clp-redir-cs-muted { color: #6c757d; font-size: 13px; margin: 0; }
-.clp-redir-cs-dialog-foot {
-  display: flex; justify-content: flex-end; gap: 8px;
-  padding: 12px 18px; border-top: 1px solid #dee2e6;
-}
+a.clp-redir-cs-link { text-decoration: underline; color: inherit; white-space: nowrap; }
 
 html.dark .clp-redir-cs-alert.alert-warning {
   background: #332701; border-color: #664d03; color: #ffda6a;
 }
-html.dark .clp-redir-cs-alert.alert-success {
-  background: #0f291e; border-color: #1e563f; color: #75b798;
-}
-html.dark .clp-redir-cs-alert.alert-danger, html.dark .clp-redir-cs-inline-error {
-  background: #2c0b0e; border-color: #842029; color: #ea868f;
-}
 html.dark .clp-redir-cs-target { background: rgba(255, 255, 255, .1); color: inherit; }
 html.dark a.clp-redir-cs-link { color: inherit; }
-html.dark .clp-redir-cs-dialog {
-  background: var(--clp-bg-color-card, #1d2229);
-  color: var(--clp-text-color, #e6edf3);
-  border-color: var(--clp-border-color, #30363d);
-}
-html.dark .clp-redir-cs-dialog-head, html.dark .clp-redir-cs-dialog-foot { border-color: var(--clp-border-color, #30363d); }
-html.dark .clp-redir-cs-dialog-head .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
-html.dark .clp-redir-cs-badge-delete { background: rgba(220, 53, 69, .25); color: #ea868f; }
-html.dark .clp-redir-cs-muted { color: #9bacb6; }
