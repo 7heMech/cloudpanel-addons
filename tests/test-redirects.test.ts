@@ -1133,10 +1133,11 @@ describe("a CloudPanel site replaces a redirect", () => {
     const helper = await env.act<CreateSiteHelper>("create-site-helper");
     expect(env.cf.calls.length).toBe(calls);
     expect(helper.automatic).toBe(true);
-    expect(helper.redirects.map((r) => `${r.source}:${r.servedBy}:${r.standIn}`)).toEqual([
-      "replace-cf.example:cloudflare:false",
-      "replace-local.example:stand-in:true",
+    expect(helper.redirects.map((r) => `${r.source}:${r.standIn}`)).toEqual([
+      "replace-cf.example:false",
+      "replace-local.example:true",
     ]);
+    expect(helper.redirects.every((r) => !("servedBy" in r) && !("zone" in r))).toBe(true);
     expect(helper.redirects[0]!.hosts).toEqual(["replace-cf.example", "www.replace-cf.example"]);
   });
 
@@ -1160,8 +1161,8 @@ describe("a CloudPanel site replaces a redirect", () => {
 
   test("Create Site helper only informs: it says the site replaces the redirect and offers no action", async () => {
     const page = createSitePage([
-      { source: "a.example", target: "https://x.example", hosts: ["a.example", "www.a.example"], standIn: false, servedBy: "cloudflare", zone: "a.example" },
-      { source: "b.example", target: "https://y.example", hosts: ["b.example", "www.b.example"], standIn: true, servedBy: "stand-in", zone: null },
+      { source: "a.example", target: "https://x.example", hosts: ["a.example", "www.a.example"], standIn: false },
+      { source: "b.example", target: "https://y.example", hosts: ["b.example", "www.b.example"], standIn: true },
     ]);
     await page.settle();
     page.type("www.a.example");

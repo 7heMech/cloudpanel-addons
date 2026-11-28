@@ -528,8 +528,6 @@ const PREVIEW_CREATE_SITE_REDIRECTS = [
     status: 301,
     mode: "local",
     standIn: true,
-    servedBy: "stand-in",
-    zone: null,
   },
   {
     source: "example-brand.net",
@@ -538,8 +536,6 @@ const PREVIEW_CREATE_SITE_REDIRECTS = [
     status: 301,
     mode: "auto",
     standIn: false,
-    servedBy: "cloudflare",
-    zone: "example-brand.net",
   },
 ];
 

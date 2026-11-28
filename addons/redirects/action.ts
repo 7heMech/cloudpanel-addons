@@ -160,8 +160,6 @@ export interface CreateSiteRedirectEntry {
   keepQuery: boolean;
   standIn: boolean;
   hosts: string[];
-  servedBy: "cloudflare" | "stand-in" | "pending";
-  zone: string | null;
 }
 
 export interface CreateSiteHelper {
@@ -456,11 +454,6 @@ class Action {
           : zoneName && redirect.mode !== "local"
             ? redirectHosts(redirect.source, zoneName)
             : standInHosts(redirect.source);
-      const servedBy: CreateSiteRedirectEntry["servedBy"] = standIn
-        ? "stand-in"
-        : (plan?.zone || tracked) && redirect.mode !== "local"
-          ? "cloudflare"
-          : "pending";
       return {
         source: redirect.source,
         target: redirect.target,
@@ -469,8 +462,6 @@ class Action {
         keepQuery: redirect.keepQuery,
         standIn: Boolean(standIn),
         hosts,
-        servedBy,
-        zone: zoneName,
       };
     });
     return { redirects, automatic: policy.automatic };

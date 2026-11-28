@@ -198,7 +198,8 @@ and its plain ES5 script attaches no `submit` listener and posts nothing.
 
 On load it fetches `GET /addons/redirects/api/create-site-helper`, which reads
 local policy and status files only and makes no Cloudflare API calls. When the
-entered domain matches a redirect's source or covered hosts, the notice below the
+entered domain matches a redirect's source or the hosts it answers for in its
+last plan (the hosts a site replaces it at), the notice below the
 Domain Name row says that creating the site replaces the redirect, removing its
 Cloudflare rule and any stand-in site (once reviewed in Redirects, when it asks
 first). A stand-in site already holds its own source domain in CloudPanel, so for
