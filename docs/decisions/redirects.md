@@ -180,7 +180,9 @@ Upgrading from a release where DNS owned redirect domains runs
 `redirectRules`, Cloudflare `zoneChoices`, and Cloudflare `connectionIds` into
 `/var/lib/clp-addons/redirects/`, drops `profileId`, marks redirects that were
 on PowerDNS as `mode: "local"` while keeping their custom stand-in `hosts`, and
-cleans those fields from DNS.
+cleans those fields from DNS. A redirect is on PowerDNS when its legacy plan
+resolved a PowerDNS zone, or, with no resolved zone, when a PowerDNS zone
+choice covers its source.
 
 If DNS is enabled (`dns.conf` exists), migration enables Redirects and carries
 over `automatic`. If DNS is disabled, Redirects stays disabled with `automatic:

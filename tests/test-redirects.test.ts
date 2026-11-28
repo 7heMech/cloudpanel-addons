@@ -1009,6 +1009,31 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
     expect(existsSync(join(redirectsDir, "policy.json"))).toBe(false);
   });
 
+  test("migration takes a redirect's mode from the zone its legacy plan resolved before any ancestor zone choice", () => {
+    const dir = mkdtempSync(join(tmpdir(), "redirects-mig-provider-"));
+    dirs.push(dir);
+    const dnsDir = join(dir, "dns");
+    const redirectsDir = join(dir, "redirects");
+    mkdirSync(dnsDir, { recursive: true });
+    const legacy = (source: string) => ({ source, target: "https://example.net", status: 301, keepPath: true, keepQuery: true, profileId: null });
+    writeFileSync(join(dnsDir, "policy.json"), JSON.stringify({
+      version: 1, automatic: false,
+      redirects: [legacy("go.shop.example.com"), legacy("pd.example.com"), legacy("unplanned.example.com")],
+      zoneChoices: { "example.com": { connectionId: "pdns-1", zoneId: "example.com." } },
+    }), { mode: 0o600 });
+    writeFileSync(join(dnsDir, "status.json"), JSON.stringify({
+      plans: {
+        "go.shop.example.com": { zone: { provider: "cloudflare", name: "shop.example.com" } },
+        "pd.example.com": { zone: { provider: "powerdns", name: "example.com" } },
+      },
+    }), { mode: 0o600 });
+    const redirectsConfigFile = join(dir, "redirects.conf");
+    migrateRedirectsFromDns(() => {}, { dnsDir, redirectsDir, dnsConfigFile: join(dir, "dns.conf"), redirectsConfigFile, rootUid: process.getuid!() });
+    const modes = Object.fromEntries(JSON.parse(readFileSync(join(redirectsDir, "policy.json"), "utf8")).redirects
+      .map((redirect: Redirect) => [redirect.source, redirect.mode ?? "auto"]));
+    expect(modes).toEqual({ "go.shop.example.com": "auto", "pd.example.com": "local", "unplanned.example.com": "local" });
+  });
+
   test("migration keeps Redirects disabled with automatic: false when DNS is disabled, and refuses symlinks", () => {
     const dir = mkdtempSync(join(tmpdir(), "redirects-mig-off-"));
     dirs.push(dir);

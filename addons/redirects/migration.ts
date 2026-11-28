@@ -176,8 +176,10 @@ export function migrateRedirectsFromDns(
         keepQuery: raw.keepQuery,
       });
       const source = parsed.source;
-      const onPowerDns = dnsPlans[source]?.zone?.provider === "powerdns"
-        || Object.entries(dnsZoneChoices).some(([zone, choice]) =>
+      const resolvedProvider = dnsPlans[source]?.zone?.provider;
+      const onPowerDns = typeof resolvedProvider === "string"
+        ? resolvedProvider === "powerdns"
+        : Object.entries(dnsZoneChoices).some(([zone, choice]) =>
           (source === zone || source.endsWith(`.${zone}`))
           && typeof choice?.connectionId === "string"
           && choice.connectionId.startsWith("pdns-"));
