@@ -34,7 +34,7 @@ import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../lib/cloudflare/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
-import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
+import { mailcowSeededProfile as dnsMailcowProfile, presetsFor as dnsPresetsFor, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate, tokenTemplates as cloudflareTokenTemplates } from "../lib/cloudflare/tokens";
 import {
   dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
@@ -106,17 +106,24 @@ const sites: SiteSummary[] = [
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
 
-/** Connections and a mixed fleet. ?setup shows first visit, ?ask before Automatic, ?provider=powerdns|mixed switches DNS providers. */
+/** Connections and a mixed fleet. ?setup shows first visit, ?ask before Automatic, ?provider=powerdns|mixed switches DNS providers, ?mailcow=unlinked|removed previews Mailcow states. */
 function dnsPreviewState(url: URL): DnsState {
   const setup = url.searchParams.has("setup");
   const automatic = !setup && !url.searchParams.has("ask");
   const providerMode = url.searchParams.get("provider");
+  const mailcowMode = url.searchParams.get("mailcow");
+  const mailcowUnlinked = setup || mailcowMode === "unlinked";
+  const mailcowRemoved = !setup && mailcowMode === "removed";
+  const mailcowLinked = !mailcowUnlinked && !mailcowRemoved;
   const powerdnsOnly = !setup && providerMode === "powerdns";
   const mixedProviders = !setup && providerMode === "mixed";
   const mode = automatic ? "enforce" as const : "report" as const;
   const seeded = dnsSeededPolicy().profiles;
   const web = seeded[0]!;
-  const mailcow = seeded[1]!;
+  const google = seeded[1]!;
+  const dmarc = seeded[2]!;
+  const mailcow = dnsMailcowProfile();
+  const baseProfiles = mailcowUnlinked ? [web, google, dmarc] : [web, mailcow, google, dmarc];
   const zone = (name: string, status = "active", provider: "cloudflare" | "powerdns" = powerdnsOnly ? "powerdns" : "cloudflare") => ({
     id: provider === "powerdns" ? `${name}.` : "0".repeat(32),
     name,
@@ -128,72 +135,85 @@ function dnsPreviewState(url: URL): DnsState {
     provider,
   });
   const plan = (domain: string, extra: Partial<DnsSitePlan>): DnsSitePlan => ({
-    domain, profileId: "web", mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
+    domain, httpProfileId: "web", mailProfileId: null, mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
   const redirect = (source: string, target: string, extra: Partial<DnsRedirect & { standIn: boolean }> = {}): DnsRedirect & { standIn: boolean } =>
-    ({ source, target, status: 301, keepPath: true, keepQuery: true, profileId: null, standIn: false, ...extra });
+    ({ source, target, status: 301, keepPath: true, keepQuery: true, mailProfileId: null, standIn: false, ...extra });
+  const mailRole = mailcowUnlinked ? "google" : "mailcow";
+  const mailMissing = mailcowRemoved ? { mailcowMissing: true as const } : {};
+  const mailMissingProblems = mailcowRemoved ? ["Mailcow is not connected; connect Mailcow or change this domain's Mail role"] : [];
+  const mailOrgChanges = (isPowerDns: boolean, includeMailcowDomain: boolean): DnsSitePlan["changes"] => {
+    if (mailcowRemoved) return [];
+    const ttlSuffix = isPowerDns ? " · TTL 300" : "";
+    if (mailRole === "google") {
+      return [
+        { action: "create", subject: "MX mail.example.org", detail: `smtp.google.com · priority 1${ttlSuffix}` },
+        { action: "update", subject: "TXT mail.example.org", detail: `v=spf1 include:_spf.mlsend.com include:_spf.google.com ~all${ttlSuffix}`, before: `v=spf1 include:_spf.mlsend.com ~all${ttlSuffix}` },
+      ];
+    }
+    return [
+      ...(includeMailcowDomain ? [{ action: "create" as const, subject: "Mailcow domain", detail: "mail.example.org" }] : []),
+      { action: "create", subject: "MX mail.example.org", detail: `mail.example.net · priority 10${ttlSuffix}` },
+      { action: "update", subject: "TXT mail.example.org", detail: `v=spf1 include:_spf.mlsend.com mx ~all${ttlSuffix}`, before: `v=spf1 include:_spf.mlsend.com ~all${ttlSuffix}` },
+    ];
+  };
+  const sortSites = (list: DnsState["sites"]): DnsState["sites"] => list.sort((a, b) => a.domain.localeCompare(b.domain));
   const sites: DnsState["sites"] = setup ? [
-    { domain: "example.com", type: "wordpress", profileId: null, plan: null, ssl: null },
-    { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
-    { domain: "old-name.example.org", type: "redirect", profileId: null, ssl: null, redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
-      plan: { ...plan("old-name.example.org", { profileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
-  ] : powerdnsOnly ? [
-    { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
-    { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
+    { domain: "example.com", type: "wordpress", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
+    { domain: "shop.example.com", type: "php", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
+    { domain: "old-name.example.org", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: null, ssl: null,
+      redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
+      plan: { ...plan("old-name.example.org", { httpProfileId: null, mailProfileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
+  ] : powerdnsOnly ? sortSites([
+    { domain: "example.com", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: null, plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
+    { domain: "shop.example.com", type: "php", httpRole: "site", httpProfileId: "web", mailProfileId: "google", plan: plan("shop.example.com", { mailProfileId: "google", changes: [
       { action: "update", subject: "A shop.example.com", detail: "203.0.113.10 · TTL 300", before: "198.51.100.4 · TTL 300" },
       { action: "create", subject: "AAAA shop.example.com", detail: "2001:db8::10 · TTL 300" },
     ] }), ssl: null },
-    { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
-      profileId: "web-mailcow", zone: zone("example.org", "active", "powerdns"),
-      changes: [
-        { action: "create", subject: "MX mail.example.org", detail: "mail.example.net · priority 10 · TTL 300" },
-        { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all · TTL 300", before: "v=spf1 include:_spf.mlsend.com ~all · TTL 300" },
-      ] }), ssl: null },
-    { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null,
-      redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow", standIn: true }),
-      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net", "active", "powerdns"), certificateNames: [] }), redirect: true as const } },
-  ].sort((a, b) => a.domain.localeCompare(b.domain)) : [
-    { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
-    { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
+    { domain: "mail.example.org", type: "php", httpRole: "dns-only", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, plan: plan("mail.example.org", {
+      httpProfileId: null, mailProfileId: mailRole, zone: zone("example.org", "active", "powerdns"), problems: mailMissingProblems,
+      changes: mailOrgChanges(true, false) }), ssl: null },
+    { domain: "docs.example.com", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
+    { domain: "example-brand.net", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
+      redirect: redirect("example-brand.net", "https://example.com", { mailProfileId: mailRole, standIn: true }),
+      plan: { ...plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", "powerdns"), problems: mailMissingProblems, certificateNames: [] }), redirect: true as const } },
+  ]) : sortSites([
+    { domain: "example.com", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: "google", plan: plan("example.com", { mailProfileId: "google", certificateNames: ["example.com", "www.example.com"] }), ssl: null },
+    { domain: "shop.example.com", type: "php", httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc", plan: plan("shop.example.com", { mailProfileId: "dmarc", changes: [
       { action: "update", subject: "A shop.example.com", detail: "203.0.113.10 · proxied", before: "198.51.100.4 · DNS only" },
       { action: "create", subject: "AAAA shop.example.com", detail: "2001:db8::10 · proxied" },
       { action: "delete", subject: "CNAME shop.example.com", detail: "shops.myshopify.com · DNS only" },
     ] }), ssl: null },
-    { domain: "new-client.example.org", type: "wordpress", profileId: "web", plan: plan("new-client.example.org", { zone: zone("example.org", "pending", mixedProviders ? "powerdns" : "cloudflare") }),
+    { domain: "new-client.example.org", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: null, plan: plan("new-client.example.org", { zone: zone("example.org", "pending", mixedProviders ? "powerdns" : "cloudflare") }),
       ssl: mixedProviders ? null : "Waiting for DNS: Zone example.org is pending; set its nameservers at the registrar" },
-    { domain: "a-rather-long-customer-hostname.staging.example.net", type: "nodejs", profileId: "web-mailcow", plan: plan("a-rather-long-customer-hostname.staging.example.net", {
-      profileId: "web-mailcow", zone: null,
+    { domain: "a-rather-long-customer-hostname.staging.example.net", type: "nodejs", httpRole: "site", httpProfileId: "web", mailProfileId: mailRole, ...mailMissing, plan: plan("a-rather-long-customer-hostname.staging.example.net", {
+      mailProfileId: mailRole, zone: null,
       problems: ["example.net is reachable through more than one connection; choose which one manages it"],
       zoneChoices: [
         { zone: "example.net", connectionId: "cf-1", zoneId: "1".repeat(32), label: "Agency · Example Agency (active)" },
         { zone: "example.net", connectionId: mixedProviders ? "pdns-1" : "cf-2", zoneId: mixedProviders ? "example.net." : "1".repeat(32), label: mixedProviders ? "Primary NS · PowerDNS (localhost)" : "Church · Church account (active)" },
       ] }), ssl: null },
-    { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
-      profileId: "web-mailcow", zone: zone("example.org", "active", mixedProviders ? "powerdns" : "cloudflare"),
-      changes: [
-        { action: "create", subject: "Mailcow domain", detail: "mail.example.org" },
-        { action: "create", subject: "MX mail.example.org", detail: mixedProviders ? "mail.example.net · priority 10 · TTL 300" : "mail.example.net · priority 10" },
-        { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all", before: "v=spf1 include:_spf.mlsend.com ~all" },
-      ] }), ssl: null },
-    { domain: "brand-new.example.co.uk", type: "wordpress", profileId: "web", plan: plan("brand-new.example.co.uk", { zone: null, changes: [
+    { domain: "mail.example.org", type: "php", httpRole: "dns-only", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, plan: plan("mail.example.org", {
+      httpProfileId: null, mailProfileId: mailRole, zone: zone("example.org", "active", mixedProviders ? "powerdns" : "cloudflare"), problems: mailMissingProblems,
+      changes: mailOrgChanges(mixedProviders, true) }), ssl: null },
+    { domain: "brand-new.example.co.uk", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: null, plan: plan("brand-new.example.co.uk", { zone: null, changes: [
       { action: "create", subject: "Cloudflare zone", detail: "example.co.uk in Example Agency; then set its nameservers at the registrar" },
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
-    { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null,
-      redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow", standIn: mixedProviders }),
-      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), certificateNames: [] }), redirect: true as const } },
-    { domain: "book.example.com", type: "redirect", profileId: null, ssl: null,
+    { domain: "docs.example.com", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
+    { domain: "example-brand.net", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
+      redirect: redirect("example-brand.net", "https://example.com", { mailProfileId: mailRole, standIn: mixedProviders }),
+      plan: { ...plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), problems: mailMissingProblems, certificateNames: [] }), redirect: true as const } },
+    { domain: "book.example.com", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: null, ssl: null,
       redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition", { keepPath: false, status: 302 }),
-      plan: { ...plan("book.example.com", { profileId: null, certificateNames: [], changes: [
+      plan: { ...plan("book.example.com", { httpProfileId: null, mailProfileId: null, certificateNames: [], changes: [
         { action: "update", subject: "Cloudflare redirect rule", detail: "book.example.com: 302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the query string",
           before: "302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the path and query string · except Let's Encrypt checks · another tool's rule, taken over in place" },
         { action: "update", subject: "AAAA book.example.com", detail: "100:: · proxied", before: "2001:db8::10 · proxied" },
         { action: "delete", subject: "A book.example.com", detail: "203.0.113.10 · proxied" },
       ] }), redirect: true as const } },
-  ].sort((a, b) => a.domain.localeCompare(b.domain));
+  ]);
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const log: DnsState["log"] = setup ? [] : powerdnsOnly ? [
     { at: at(3), cause: "New site", sites: ["example.com"], zone: "example.com", action: "create", subject: "PowerDNS zone",
@@ -210,7 +230,15 @@ function dnsPreviewState(url: URL): DnsState {
     ...Array.from({ length: 12 }, (_, n) => ({ at: at(1440 + n), cause: "Confirmed review", sites: [`site-${n}.example.com`], zone: "example.com",
       action: "create" as const, subject: `A site-${n}.example.com`, detail: "203.0.113.10 · proxied" })),
   ];
-  const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
+  const profiles = baseProfiles.map((profile) => ({
+    ...profile,
+    sites: profile.role === "http"
+      ? sites.filter((site) => site.httpProfileId === profile.id).length
+      : sites.filter((site) => site.mailProfileId === profile.id).length,
+  }));
+  const affectedSites = mailcowRemoved
+    ? sites.filter((site) => site.mailProfileId === "mailcow").map((site) => site.domain)
+    : [];
   const panelHost = dnsPreviewPanelHost(url, setup, plan, powerdnsOnly);
   const customDomain = setup ? null
     : url.searchParams.get("panelhost") === "adopt" ? { name: "panel.example.com", issued: true }
@@ -238,7 +266,8 @@ function dnsPreviewState(url: URL): DnsState {
     automatic,
     createIn: null,
     profiles,
-    defaultProfileId: setup ? null : "web",
+    defaultHttpProfileId: setup ? null : "web",
+    defaultMailProfileId: null,
     sites,
     connections: single ? allConnections.slice(0, 1) : allConnections,
     accounts: setup ? []
@@ -255,9 +284,9 @@ function dnsPreviewState(url: URL): DnsState {
         { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
       ],
     zones: setup ? [] : powerdnsOnly ? ["example-brand.net", "example.com", "example.org"] : ["church.example", "example-brand.net", "example.com", "example.net", "example.org"],
-    mailcow: setup
-      ? { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false }
-      : { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true },
+    mailcow: mailcowLinked
+      ? { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true, linked: true, affectedSites: [] }
+      : { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false, linked: false, affectedSites },
     smtpRelays: [{ profile: "Mailcow", host: "mail.example.net", username: "relay@example.net" }],
     server: { ipv4: "", ipv6: "", detected: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" } },
     orphans: setup ? [] : [{ domain: "retired.example.com", zone: "example.com", records: 4 }],
@@ -266,7 +295,7 @@ function dnsPreviewState(url: URL): DnsState {
     token: dnsTokenTemplate(previewEdgeDefaults, { dns: true }),
     tokens: cloudflareTokenTemplates(previewEdgeDefaults),
     firewallEnabled: true,
-    presets: DNS_PRESETS,
+    presets: dnsPresetsFor(mailcowLinked),
     log,
     panelHost,
     customDomain,
@@ -285,7 +314,7 @@ function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, ex
   return {
     name,
     problem: stage === "clash" ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site` : null,
-    plan: stage === "clash" ? null : { ...plan(name, { profileId: "panel-hostname", certificateNames: [], ...(stage === "proxied" ? { wildcard: "*.example.com" } : {}) }), panel: true, changes },
+    plan: stage === "clash" ? null : { ...plan(name, { httpProfileId: "panel-hostname", mailProfileId: null, certificateNames: [], ...(stage === "proxied" ? { wildcard: "*.example.com" } : {}) }), panel: true, changes },
     customDomain: stage === "waiting" ? { name, issued: false } : stage === "proxied" ? { name, issued: true } : null,
     proxied: !powerdnsOnly && stage === "proxied",
   };
@@ -2732,11 +2761,14 @@ const server = Bun.serve({
       const dialog = url.searchParams.get("dialog");
       const at = url.searchParams.get("at");
       const openers: Record<string, string> = {
-        profile: "dnsEditProfile('web-mailcow')",
-        advanced: "dnsEditProfile('web-mailcow');document.getElementById('dns-advanced').click();document.getElementById('dns-zone-details').open=true",
-        new: "dnsEditProfile('')",
+        profile: "dnsEditProfile('web', 'http')",
+        "mail-profile": "dnsEditProfile('mailcow', 'mail')",
+        advanced: "dnsEditProfile('web', 'http');document.getElementById('dns-advanced').click()",
+        new: "dnsEditProfile('', 'http')",
+        "new-mail": "dnsEditProfile('', 'mail')",
         review: `dnsShowReview(${JSON.stringify(dnsPreviewReview(state))})`,
         site: "dnsShowSite('shop.example.com')",
+        "mail-site": "dnsShowSite('mail.example.org')",
         pending: "dnsShowSite('new-client.example.org')",
         choose: "dnsShowSite('a-rather-long-customer-hostname.staging.example.net')",
         connection: "dnsEditConnection('', 'cloudflare')",

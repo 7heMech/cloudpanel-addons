@@ -2,13 +2,13 @@
 
 ## Scope
 
-DNS keeps each CloudPanel site's records to a profile across Cloudflare or
-PowerDNS Authoritative API v1, so that creating a site is enough to publish it,
-and serves redirect domains. Mailcow is an optional integration of a profile
-that sets up the site's domain, its DKIM key, and a shared mailbox's permission
-to send as it. The addon replaces infrastructure-as-code for these records
-rather than coexisting with it. It follows the panel's site list, and once it is
-Automatic what it writes cannot drift.
+DNS keeps each CloudPanel site's records to its HTTP and Mail profiles across
+Cloudflare or PowerDNS Authoritative API v1, so that creating a site is enough
+to publish it, and serves redirect domains. Mailcow is an optional Mail role
+integration that sets up the domain, its DKIM key, and a shared mailbox's
+permission to send as it. The addon replaces infrastructure-as-code for these
+records rather than coexisting with it. It follows the panel's site list, and
+once it is Automatic what it writes cannot drift.
 
 Nothing about one operator's setup is built in. The server's addresses are
 detected, the Mailcow host, key policy, and mailbox are settings, and the
@@ -85,15 +85,33 @@ SPF, and DKIM. On zones where `capabilities.proxy` is `false`, the panel
 hostname stays unproxied, hands off to matching unproxied wildcards, and makes
 no proxy change when CloudPanel issues its certificate.
 
-## Profiles
+## Profiles and roles
 
-A profile is an ordered list of record rows plus an optional Mailcow switch.
-Whole-zone Cloudflare edge settings (SSL/TLS mode, Always Use HTTPS, Full SSL
-rules, and WAF skip IPs) belong to [Firewall](firewall.md#cloudflare-edge-defaults)
-rather than DNS profiles. Sites are assigned in bulk, and one profile can be the
-default for new sites, as in Resource Limits and SMTP Relay; choosing a default
-or assigning a site records the site ids that exist then, so a default never
-reaches back over the fleet.
+DNS separates each domain's mutually exclusive HTTP role (Site, Redirect, or
+DNS-only) from its independent Mail role (None, Mailcow, Google Workspace,
+DMARC, or custom record templates). Profiles are tagged with `role: "http"` or
+`role: "mail"`, so operators compose an HTTP profile and a Mail profile instead
+of maintaining combinatorial profiles such as "Web and Mailcow".
+
+- A CloudPanel site picks an HTTP profile for the Site HTTP role, or leaves
+  HTTP unset for DNS-only (no web records written by DNS), and independently
+  picks a Mail profile or None. When both are unset, DNS leaves the site alone.
+- A redirect domain has the Redirect HTTP role (mutually exclusive with Site
+  and DNS-only) and independently picks a Mail profile (`mailProfileId`) or
+  None.
+- Defaults for new sites are stored separately as `defaultHttpProfileId` and
+  `defaultMailProfileId`. Setting either default or assigning a site records
+  the site ids that exist then, so defaults never reach back over existing
+  sites.
+
+A profile is an ordered list of record rows plus an optional Mailcow switch on
+Mail profiles. Whole-zone Cloudflare edge settings (SSL/TLS mode, Always Use
+HTTPS, Full SSL rules, and WAF skip IPs) belong to
+[Firewall](firewall.md#cloudflare-edge-defaults) rather than DNS profiles.
+HTTP profiles cannot turn on Mailcow or use `{mailcow.*}` placeholders. When
+both an HTTP profile and a Mail profile apply to one site, `composeProfiles`
+concatenates their record rows so duplicate records and CNAME/SPF collisions
+are caught before writing.
 
 A row has a type (A, AAAA, CNAME, MX, TXT, SRV, CAA), a name, content, proxy,
 TTL, a priority for MX and SRV, and "apex only", which skips the row when the
@@ -104,17 +122,50 @@ wildcard and policy without publishing extra names. Names and content take
 `{domain}`, `{zone}`, `{sub}` and `{mailcow.selector}`; content also takes
 `{ipv4}`, `{ipv6}`, `{mailcow.host}` and `{mailcow.dkim}`. A rendered name
 must lie in the site's zone; `{zone}` is how a `www.example.com` site reaches
-`example.com`. A row whose address placeholder is empty -- a server with no
-IPv6 -- writes nothing but still owns its name, so a stale AAAA is removed. An
-address that cannot be detected -- more than one of a family, or an IPv4 behind
-NAT once CloudPanel's cached one has expired -- stops the sites that use it
-until it is set under Server addresses. A save is checked by rendering every
-row for an apex and a subdomain site. Duplicate records and multiple CNAME
-rows at one name are refused before saving.
+`example.com`. A row whose address placeholder is empty, such as on a server
+with no IPv6, writes nothing but still owns its name so a stale AAAA is
+removed. An address that cannot be detected, such as more than one of a family
+or an IPv4 behind NAT once CloudPanel's cached one has expired, stops the sites
+that use it until it is set under Server addresses. A save is checked by
+rendering every row for an apex and a subdomain site. Duplicate records and
+multiple CNAME rows at one name are refused before saving.
 
-Presets only fill the editor: Web (CloudPanel), Mailcow, Google Workspace and
-DMARC. A new install offers two profiles built from them, "Web" and "Web and
-Mailcow", produced on read so a deleted one stays deleted.
+Presets only fill the editor: Web (CloudPanel) for HTTP profiles, and Mailcow,
+Google Workspace and DMARC for Mail profiles. Fresh unlinked installs omit the
+Mailcow preset and seed Web (HTTP), Google Workspace (Mail), and DMARC (Mail)
+on read so a deleted profile stays deleted. Linking Mailcow for the first time
+adds the Mailcow Mail profile automatically when fewer than 48 profiles exist;
+at the 48-profile limit it saves the Mailcow connection and tells the operator
+to delete an unused profile and create a Mailcow Mail profile under Profiles.
+
+### Policy v1 to v2 migration
+
+`parsePolicy` migrates saved version 1 single-profile policies to version 2
+deterministically without altering live DNS records:
+
+- Pure HTTP profiles keep their ID and records with `role: "http"`; pure Mail
+  profiles keep their ID and records with `role: "mail"`.
+- Combinatorial profiles that hold both HTTP and Mail rows (such as "Web and
+  Mailcow") split into an HTTP profile and a Mail profile, deduplicating each
+  half against existing profiles with the same `profileEffect`. An untouched,
+  unused default "Web and Mailcow" profile on an unlinked install is dropped.
+- For any v1 profile referenced by a redirect, all non-web rows (including
+  custom TXT or CAA records) move into the Mail role and web rows stay in the
+  HTTP role, so migrated redirects keep every custom record without copying web
+  rows.
+- Site assignments map from `profileId` to `{ http, mail }`, redirect
+  `profileId` maps to the migrated `mailProfileId`, and `defaultProfileId` maps
+  to `defaultHttpProfileId` and `defaultMailProfileId`.
+- If DNS saves a v2 `policy.json` before Firewall migrates legacy Cloudflare
+  edge options, `legacyProfileZones` gives each migrated v2 HTTP and Mail
+  profile the `zone` blocks of the v1 profiles folded into it, counting only
+  v1 profiles that a site, redirect or the default uses (all of them when none
+  is used). Where folded profiles disagree, the v2 profile keeps the list of
+  their blocks, so Firewall sees the disagreement and leaves that setting for
+  review. On a v2 file, `migrateCloudflareEdgeFromDns` weighs every profile that
+  still carries a `zone` block, which covers a web-only redirect whose HTTP
+  half v2 no longer references; on v1 it reads the assignment, redirect and
+  default profile references.
 
 ## What a profile owns
 
@@ -163,35 +214,40 @@ every sender is left exactly as written.
 
 ## Ask first and Automatic
 
-Until a Cloudflare connection exists, the page replaces the full workspace with
-a focused first-run setup card that links straight to Connect Cloudflare and,
-when stand-in redirects already exist, **Check now**, the Redirects card, and
-the Ask-first bar or Automatic sync toggle.
+Until a DNS provider connection exists, the page replaces the full workspace
+with a focused first-run setup card that links straight to Connect Cloudflare
+and Connect PowerDNS and, when stand-in redirects already exist, **Check now**,
+the Redirects card, and the Ask-first bar or Automatic sync toggle.
 Once connected, the page uses the shared `.section-shell` navigation to split
-into five sections: Sites, Redirects, Profiles, Settings, and Activity. Deep
-links such as `#dns-connection`, `#dns-panel-host`, and `#dns-mode` open the
-matching section automatically.
+into six sections: Sites, Redirects, Profiles, Mailcow, Settings, and Activity.
+Deep links such as `#dns-connection`, `#dns-panel-host`, `#dns-mode`, and
+`#mailcow` open the matching section automatically.
 
 The Sites section holds the site table, the Ask-first banner while Automatic is
-off, and any deleted-site orphan records. It has the shared search from six
-sites, filters for needs attention, changes waiting, not managed, and site
-runtime, sorting on every heading, and desktop bulk controls that stay hidden
-until at least one row is ticked. When only one Cloudflare connection exists,
-each site's status line omits the redundant connection label. The Redirects
-section holds Add redirect, Find redirects in Cloudflare, and the redirect
-table, keeping redirects out of the site table's selection, filters, and sort.
-On a phone each redirect card leads with source and target, DNS status, and the
-profile with Edit and Details beside it, cutting past ten rows behind a Show
-all button. A site's Details dialog leads with its status chip, problems, any
-pending nameservers with per-nameserver copy buttons, pending changes, and
-descriptive facts.
+off, and any deleted-site orphan records. Each site row has separate HTTP
+(`DNS-only` or an HTTP profile) and Mail (`None` or a Mail profile) selectors,
+and bulk assignment can update HTTP, Mail, or both independently. Sites has the
+shared search from six sites, filters for needs attention, changes waiting, not
+managed, and site runtime, sorting on every heading, and desktop bulk controls
+that stay hidden until at least one row is ticked. When only one DNS connection
+exists, each site's status line omits the redundant connection label. The
+Redirects section holds Add redirect, Find redirects in Cloudflare, and the
+redirect table, showing each redirect's independent Mail role and keeping
+redirects out of the site table's selection, filters, and sort. On a phone each
+redirect card leads with source and target, DNS status, and the Mail role with
+Edit and Details beside it, cutting past ten rows behind a Show all button. A
+site's Details dialog leads with its status chip, problems, any pending
+nameservers with per-nameserver copy buttons, pending changes, and descriptive
+facts including its HTTP role and Mail role.
 
-The Profiles section holds the record profiles and the default profile selector
-for new sites. The Settings section holds the Automatic sync toggle,
-Cloudflare connections, the New zones account picker when more
-than one Cloudflare account is reachable, Panel hostname, and closed
-disclosures for Mailcow and Server addresses that open automatically when
-configured or overridden. The Activity section holds the change log.
+The Profiles section splits into HTTP profiles and Mail profiles cards, each
+with its own default selector for new sites. The Mailcow section holds a
+focused first-run Connect Mailcow card with zero settings below it while
+unlinked, and shows the Mailcow connection details plus domains using Mailcow
+once linked. The Settings section holds DNS connections, the New zones account
+picker when more than one account is reachable, Automatic sync, Panel hostname,
+and a closed disclosure for Server addresses that opens automatically when
+overridden or undetected. The Activity section holds the change log.
 
 There is one switch for the whole addon, not one per profile: the operator
 decides once whether DNS may write, and every profile and missing zone follows
@@ -226,13 +282,14 @@ state is still pending.
 ## Redirect domains
 
 A redirect domain is a source host, a target URL, a status (301, 302, 307 or
-308), keep path and keep query string, and optionally a profile. The source is a
-zone's apex, which covers its `www` too, or one host in a zone that holds other
-things; `www` is added only to an apex. A redirect domain is planned beside the
-sites, through the same switch, reviews, log and lock, but listed in a
-Redirects card of its own, where its profile is chosen in Edit. It cannot be a CloudPanel site:
-adding one for a site's domain is refused, and a site created later at a
-redirect's domain stops the redirect with a problem.
+308), keep path and keep query string, and optionally a Mail profile
+(`mailProfileId`). The source is a zone's apex, which covers its `www` too, or
+one host in a zone that holds other things; `www` is added only to an apex. A
+redirect domain is planned beside the sites, through the same switch, reviews,
+log and lock, but listed in a Redirects card of its own, where its Mail role is
+chosen in Edit. It cannot be a CloudPanel site: adding one for a site's domain
+is refused, and a site created later at a redirect's domain stops the redirect
+with a problem.
 
 On Cloudflare it is one Single Redirect rule in the zone's
 `http_request_dynamic_redirect` entrypoint, with a `ref` of
@@ -243,13 +300,12 @@ may have no query string and loses a trailing slash; without it, a static URL.
 There is no ACME exclusion, since the origin is never reached. The rule is
 written before the placeholders, so a placeholder never answers without it.
 
-Its profile's web rows are left out and every other row applies, so mail and
-its DKIM key follow the profile as they do for a site. A web row is derived,
-not marked: an A, AAAA or CNAME row whose rendered name is the source, its
-`www` or its `*.`. Nothing else could live there, since the placeholder needs the name, so
-no row needs a flag and no profile needs editing. The placeholder claims A and AAAA at each host, and so any CNAME there, which is
-what replaces the A and AAAA records a site or Terraform left. A missing zone is
-created the same way as for a site.
+Its Mail profile's non-web rows apply, so mail and its DKIM key follow the Mail
+role as they do for a site. Any web row (an A, AAAA or CNAME row whose rendered
+name is the source, its `www` or its `*.`) is still left out so the placeholder
+always owns the redirect's HTTP hosts. The placeholder claims A and AAAA at each
+host, and so any CNAME there, which is what replaces the A and AAAA records a
+site or Terraform left. A missing zone is created the same way as for a site.
 
 A rule another tool wrote is taken over in place. Matching by `ref`, or by an
 equivalent rule as `ruleState` does for zone rules, would add a second rule
@@ -574,23 +630,31 @@ relay in SMTP Relay never changes what DNS writes without a review. The API
 key is DNS's alone, since SMTP Relay has no use for it.
 
 Removing Mailcow deletes the key and empties the settings at once, like
-removing a Cloudflare connection, with no review: nothing is written anywhere.
-Sites whose profile sets up Mailcow then plan with a problem, and a plan with a
-problem is never applied, so their records and Mailcow domains stay as they
-were.
+removing a DNS connection, with no review: nothing is written anywhere.
+Domains whose Mail role sets up Mailcow stay assigned to that Mail profile so
+nothing is discarded silently: the Mailcow tab shows a warning badge with the
+affected count and lists the affected domains inside the Connect Mailcow card,
+each affected site and redirect displays a "Mailcow unlinked" warning badge,
+Setup's Action needed raises a Mailcow item pointing to `#mailcow`, and each
+affected plan reports a problem so records and Mailcow domains stay untouched
+until Mailcow is reconnected or the domain's Mail role changes. When a
+CloudPanel site and a redirect share a domain, `mailcowSites`, `mailcowActions`,
+and profile domain counts follow the same redirect-first rule as `DnsRun` while
+leaving the stored site assignment intact if the redirect is later deleted.
 
 ## New sites and certificates
 
 DNS declares `newSites`, so the shared watcher (see
-[Platform integration](platform.md#new-sites)) gives a new site the default
-profile and, once DNS is Automatic, writes it, normally within seconds and before SMTP Relay, which
-waits at most fifteen seconds for it. When DNS is Automatic and Panel Tweaks is
-enabled with `autoSsl` turned on (checked from Panel Tweaks' enable flag and its
-root-owned `tweaks.json`, with missing or untrusted files treated as off),
-`sync-sites` and `check` also enqueue newly adopted self-signed sites created
-within `NEW_SITE_WINDOW` (fifteen minutes) into `ssl.json` via `requestSsl`.
-Sites created through `clpctl`, or whose browser completion tab closed early,
-still receive automatic Let's Encrypt retries once DNS is ready.
+[Platform integration](platform.md#new-sites)) gives a new site the default HTTP
+and Mail profiles and, once DNS is Automatic, writes them, normally within
+seconds and before SMTP Relay, which waits at most fifteen seconds for it. When
+DNS is Automatic and Panel Tweaks is enabled with `autoSsl` turned on (checked
+from Panel Tweaks' enable flag and its root-owned `tweaks.json`, with missing or
+untrusted files treated as off), `sync-sites` and `check` also enqueue newly
+adopted self-signed sites with an HTTP role created within `NEW_SITE_WINDOW`
+(fifteen minutes) into `ssl.json` via `requestSsl`. Sites created through `clpctl`, or whose
+browser completion tab closed early, still receive automatic Let's Encrypt
+retries once DNS is ready.
 
 Creating a site points its names at this server, so a new site's records at
 names with no published records yet, including a missing `*.{domain}` wildcard,
@@ -648,10 +712,12 @@ that sentence with a clipboard icon, the two forming one button that copies
 that nameserver alone, since a registrar usually has a field per nameserver.
 The notice is `lib/nameserver-notice.ts`, shared with Panel Tweaks' completion
 page, which fills it from `provision`'s reply.
-It says the certificate is requested automatically only when DNS has recorded
-a request for the site; a site still on its self-signed placeholder without one
-is told to request it under Actions, and a site with a real certificate is told
-nothing about it. A copy the browser refuses selects the nameserver instead. Anyone who
+It says the certificate is requested automatically only when Automatic sync is
+on, the site still has an HTTP profile, and DNS has recorded an active request
+for the site; a DNS-only site or one still on its self-signed placeholder
+without an active request is told to request it under Actions, and a site with a
+real certificate is told nothing about it. A copy the browser refuses selects
+the nameserver instead. Anyone who
 can open the site's page sees it, so it is fetched from
 `GET /addons/dns/api/site`, the third route a non-administrator reaches; the
 action holds a non-administrator to their own sites as `provision` does. It
@@ -682,8 +748,8 @@ refused if it still disagrees.
 ## Change log
 
 Every write DNS makes to Cloudflare, Mailcow or a stand-in site -- a zone
-created, a record created, updated or deleted, a zone setting or rule, a
-redirect rule, a Mailcow domain, DKIM key or sender list, a stand-in site -- is
+created, a record created, updated or deleted, a redirect rule, a Mailcow
+domain, DKIM key or sender list, a stand-in site -- is
 logged once it succeeds, with the time, the sites it was
 for, the zone, what it was before where that is known, and what made it: a
 scheduled check, Check now, a new site, a confirmed review, Remove records or a

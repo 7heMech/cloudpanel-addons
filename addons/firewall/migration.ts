@@ -359,27 +359,44 @@ export function migrateCloudflareEdgeFromDns(
 
   const activeIds = new Set<string>();
   if (parsed.assignments && typeof parsed.assignments === "object" && !Array.isArray(parsed.assignments)) {
-    for (const id of Object.values(parsed.assignments as Record<string, unknown>)) {
-      if (typeof id === "string" && id) activeIds.add(id);
+    for (const entry of Object.values(parsed.assignments as Record<string, unknown>)) {
+      if (typeof entry === "string" && entry) {
+        activeIds.add(entry);
+      } else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        const { http, mail } = entry as { http?: unknown; mail?: unknown };
+        if (typeof http === "string" && http) activeIds.add(http);
+        if (typeof mail === "string" && mail) activeIds.add(mail);
+      }
     }
   }
   if (Array.isArray(parsed.redirects)) {
     for (const entry of parsed.redirects) {
-      const profileId = entry && typeof entry === "object" ? (entry as { profileId?: unknown }).profileId : null;
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const { profileId, mailProfileId } = entry as { profileId?: unknown; mailProfileId?: unknown };
       if (typeof profileId === "string" && profileId) activeIds.add(profileId);
+      if (typeof mailProfileId === "string" && mailProfileId) activeIds.add(mailProfileId);
     }
   }
-  if (typeof parsed.defaultProfileId === "string" && parsed.defaultProfileId) activeIds.add(parsed.defaultProfileId);
+  for (const key of ["defaultProfileId", "defaultHttpProfileId", "defaultMailProfileId"] as const) {
+    const value = parsed[key];
+    if (typeof value === "string" && value) activeIds.add(value);
+  }
 
   const relevant = activeIds.size > 0
     ? allProfiles.filter((profile) => typeof profile.id === "string" && activeIds.has(profile.id))
     : allProfiles;
   const chosen = relevant.length > 0 ? relevant : allProfiles;
+  // On v2, only DNS's save over a v1 file writes `zone`, and only from the v1 profiles
+  // in use, so every profile still carrying one counts, including a redirect's HTTP
+  // half that v2 no longer references; zone-less profiles are newer and do not.
+  const withZone = parsed.version === 2 ? allProfiles.filter((profile) => Object.hasOwn(profile, "zone")) : [];
+  const effective = withZone.length > 0 ? withZone : chosen;
 
-  const zoneObjects = chosen.map((profile) =>
-    profile.zone && typeof profile.zone === "object" && !Array.isArray(profile.zone)
-      ? profile.zone as Record<string, unknown>
-      : {});
+  // DNS's v1-to-v2 save stores a list where legacy profiles with different zone blocks folded into one profile.
+  const asZone = (zone: unknown): Record<string, unknown> =>
+    zone && typeof zone === "object" && !Array.isArray(zone) ? zone as Record<string, unknown> : {};
+  const zoneObjects = effective.flatMap((profile) =>
+    Array.isArray(profile.zone) && profile.zone.length ? profile.zone.map(asZone) : [asZone(profile.zone)]);
 
   const sslValues = [...new Set(zoneObjects.map((zone) => SSL_MODES.find((mode) => mode === zone.ssl) ?? null))];
   const httpsValues = [...new Set(zoneObjects.map((zone) => typeof zone.alwaysHttps === "boolean" ? zone.alwaysHttps : null))];

@@ -15,7 +15,7 @@ import type { CfRuleset } from "../../lib/cloudflare/api";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { CloudflareDnsProvider } from "./cloudflare-provider";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
-import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
+import { composeProfiles, type AccountRef, type Policy, type Profile, type Redirect, type Secrets } from "./model";
 import { PowerDnsProvider } from "./powerdns";
 import {
   PROVIDER_LABELS, type DnsAccount, type DnsProvider, type DnsRecord, type DnsZone, type ProviderKind,
@@ -124,7 +124,8 @@ export interface LogEntry {
 
 export interface SitePlan {
   domain: string;
-  profileId: string | null;
+  httpProfileId: string | null;
+  mailProfileId: string | null;
   /** Whether DNS writes this plan: Automatic, or a review being confirmed. */
   mode: "report" | "enforce";
   zone: ZoneView | null;
@@ -186,7 +187,7 @@ export const PANEL_PROFILE_ID = "panel-hostname";
 export function panelProfile(proxied: boolean): Profile {
   const row = (type: "A" | "AAAA", content: string) => ({ type, name: "{domain}", content, proxied, ttl: 1, priority: null, apexOnly: false });
   return {
-    id: PANEL_PROFILE_ID, name: "Panel hostname", records: [row("A", "{ipv4}"), row("AAAA", "{ipv6}")], mailcow: false,
+    id: PANEL_PROFILE_ID, name: "Panel hostname", role: "http", records: [row("A", "{ipv4}"), row("AAAA", "{ipv6}")], mailcow: false,
   };
 }
 
@@ -432,14 +433,36 @@ export class DnsRun {
   }
 
   plannedDomains(): string[] {
-    return this.entries.filter((entry) => entry.redirect || this.profileOf(entry.domain)).map((entry) => entry.domain);
+    return this.entries.filter((entry) => entry.redirect || this.profilesOf(entry.domain).length > 0).map((entry) => entry.domain);
+  }
+
+  private roleProfiles(domain: string): { http: Profile | null; mail: Profile | null } {
+    if (domain === this.panelHost) return { http: panelProfile(this.context.panelProxied === true), mail: null };
+    const redirect = this.redirects.get(domain);
+    if (redirect) {
+      const mail = redirect.mailProfileId
+        ? this.context.policy.profiles.find((profile) => profile.role === "mail" && profile.id === redirect.mailProfileId) ?? null
+        : null;
+      return { http: null, mail };
+    }
+    const assigned = this.context.policy.assignments[domain];
+    const http = assigned?.http
+      ? this.context.policy.profiles.find((profile) => profile.role === "http" && profile.id === assigned.http) ?? null
+      : null;
+    const mail = assigned?.mail
+      ? this.context.policy.profiles.find((profile) => profile.role === "mail" && profile.id === assigned.mail) ?? null
+      : null;
+    return { http, mail };
+  }
+
+  private profilesOf(domain: string): Profile[] {
+    const { http, mail } = this.roleProfiles(domain);
+    return [http, mail].filter((profile): profile is Profile => profile !== null);
   }
 
   private profileOf(domain: string): Profile | null {
-    if (domain === this.panelHost) return panelProfile(this.context.panelProxied === true);
-    const redirect = this.redirects.get(domain);
-    const id = redirect ? redirect.profileId : this.context.policy.assignments[domain];
-    return this.context.policy.profiles.find((profile) => profile.id === id) ?? null;
+    const { http, mail } = this.roleProfiles(domain);
+    return composeProfiles(http, mail);
   }
 
   // -------------------------------------------------------------------------
@@ -561,7 +584,7 @@ export class DnsRun {
   private mailChanges(domain: string, profile: Profile, plan: SitePlan): void {
     const settings = this.context.policy.mailcow;
     if (!this.mailcow || !settings.host) {
-      plan.problems.push("This profile sets up Mailcow; set up Mailcow's hostname and API key first");
+      plan.problems.push("Mailcow is not connected; connect Mailcow or change this domain's Mail role");
       return;
     }
     const mail = this.mail.get(domain);
@@ -647,9 +670,10 @@ export class DnsRun {
 
   private planEntry(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
     const { redirect } = site;
-    const profile = this.profileOf(site.domain);
+    const { http, mail } = this.roleProfiles(site.domain);
+    const profile = composeProfiles(http, mail);
     const plan: SitePlan = {
-      domain: site.domain, profileId: profile?.id ?? null,
+      domain: site.domain, httpProfileId: http?.id ?? null, mailProfileId: mail?.id ?? null,
       mode: this.context.policy.automatic || (site.panel && this.context.panelOnly) ? "enforce" : "report",
       zone: null,
       changes: [], problems: [], zoneChoices: [], certificateNames: [], ...redirect && { redirect: true as const },
@@ -837,7 +861,7 @@ export class DnsRun {
   /** A redirect served from this server, while DNS has no provider connection. */
   private planStandIn(redirect: Redirect, profile: Profile | null, plan: SitePlan): SitePlan {
     this.planStandInChanges(redirect, plan);
-    if (profile) plan.changes.push({ action: "note", subject: "Profile", detail: "Its records apply once a DNS connection reaches this domain" });
+    if (profile) plan.changes.push({ action: "note", subject: "Mail role", detail: "Its records apply once a DNS connection reaches this domain" });
     return plan;
   }
 
@@ -1479,7 +1503,7 @@ function pointsOwnName(domain: string, op: RecordOp, published: readonly DnsReco
 
 /** Whether a new site's certificate can be requested now, and if not, why. */
 export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string; zone?: string; nameServers?: string[] } {
-  if (!plan?.profileId) return { ready: false, reason: "No DNS profile is assigned to this site" };
+  if (!plan || (!plan.httpProfileId && !plan.mailProfileId)) return { ready: false, reason: "No DNS role is assigned to this site" };
   if (plan.mode !== "enforce") return { ready: false, reason: "DNS is set to Ask first" };
   if (plan.problems.length) return { ready: false, reason: plan.problems.join("; ") };
   if (!plan.zone) return { ready: false, reason: "Its DNS zone is being created" };
@@ -1491,6 +1515,6 @@ export function readiness(plan: SitePlan | undefined): { ready: boolean; reason:
     };
   }
   if (plan.changes.some((change) => change.action !== "note" && !change.waits)) return { ready: false, reason: "Some DNS changes have not been made yet" };
-  if (!plan.certificateNames.includes(plan.domain)) return { ready: false, reason: "The profile manages no address for this site" };
+  if (plan.httpProfileId && !plan.certificateNames.includes(plan.domain)) return { ready: false, reason: "The HTTP role manages no address for this site" };
   return { ready: true, reason: "DNS is in place" };
 }

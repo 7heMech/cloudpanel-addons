@@ -241,7 +241,7 @@ describe("the panel hostname", () => {
       panelHost: {
         name: "k7m2p9x4.example.com", problem: null, customDomain: { name: "k7m2p9x4.example.com", issued: true }, proxied: true,
         plan: {
-          domain: "k7m2p9x4.example.com", profileId: PANEL_PROFILE_ID, mode: "report",
+          domain: "k7m2p9x4.example.com", httpProfileId: PANEL_PROFILE_ID, mailProfileId: null, mode: "report",
           zone: { id: "0".repeat(32), name: "example.com", status: "active", nameServers: [], account: "Agency", connection: "Agency" },
           changes: [{ action: "delete", subject: "A k7m2p9x4.example.com", detail: "203.0.113.10 · DNS only · covered by *.example.com" }],
           problems: [], zoneChoices: [], certificateNames: [], panel: true, wildcard: "*.example.com",
@@ -437,8 +437,8 @@ describe("the panel hostname", () => {
     const zone = env.cf.zones[0]!;
     await env.act("save-connection", { token: TOKEN });
     await env.act("save-mailcow", { url: "https://mail.example.net", key: env.mailcow.apiKey });
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.act("assign", { domains: ["mail-sub.a.example.com"], profileId: "web-mailcow" });
+    await env.act("assign", { domains: ["example.com"], httpProfileId: "web" });
+    await env.act("assign", { domains: ["mail-sub.a.example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
     await env.act("check");
     const mailCallsBefore = env.mailcow.calls.length;
 

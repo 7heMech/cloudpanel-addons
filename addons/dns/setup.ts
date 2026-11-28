@@ -5,7 +5,7 @@ import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
 import { addonStateDir, CLOUDFLARE_STATE_DIR } from "../../lib/paths";
 import { readState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
-import { parsePolicy, parseSecrets, type Policy } from "./model";
+import { isMailcowLinked, parsePolicy, parseSecrets, type Policy } from "./model";
 import { seededPolicy } from "./presets";
 
 const PAGE = "/addons/dns/";
@@ -15,6 +15,8 @@ interface DnsSetupState {
   tokens: Set<string>;
   /** Each connection's last check, with what its token holds. */
   reports: ({ id: string; active: boolean; error: string | null } & StoredAccess)[];
+  /** Whether a Mailcow API key is saved alongside Mailcow's URL. */
+  mailcowHasKey?: boolean;
 }
 
 function dnsState(stateDir = addonStateDir("dns"), rootUid = 0, cloudflareDir = CLOUDFLARE_STATE_DIR): DnsSetupState {
@@ -39,6 +41,7 @@ function dnsState(stateDir = addonStateDir("dns"), rootUid = 0, cloudflareDir = 
     policy: { ...policy, connections: cfConnections },
     tokens,
     reports: [...cfReports, ...pdnsReports],
+    mailcowHasKey: Boolean(secrets.mailcowKey),
   };
 }
 
@@ -82,10 +85,12 @@ export function automaticCheck(state: DnsSetupState): SetupCheck {
     || (state.policy.powerdns ?? []).some((connection) => state.tokens.has(connection.id));
   if (!hasConnection) return { state: "todo", reason: "Connect DNS first" };
   if (!state.policy.automatic) return { state: "todo", reason: "DNS asks before it changes records" };
-  const profile = state.policy.profiles.find((candidate) => candidate.id === state.policy.defaultProfileId);
-  return profile
-    ? { state: "done", reason: `New sites get ${profile.name}'s records` }
-    : { state: "todo", reason: "New sites get no profile" };
+  const http = state.policy.profiles.find((candidate) => candidate.role === "http" && candidate.id === state.policy.defaultHttpProfileId);
+  const mail = state.policy.profiles.find((candidate) => candidate.role === "mail" && candidate.id === state.policy.defaultMailProfileId);
+  const names = [http?.name, mail?.name].filter(Boolean).join(" + ");
+  return names
+    ? { state: "done", reason: `New sites get ${names}'s records` }
+    : { state: "todo", reason: "New sites get no default role" };
 }
 
 /** One item per Cloudflare connection whose token lacks a permission DNS requires; optional ones never count. */
@@ -103,8 +108,34 @@ export function permissionActions(state: DnsSetupState): ActionNeeded[] {
   });
 }
 
+/** Surfaces an Action needed item when Mailcow is unlinked while domains still assign Mailcow as their Mail role. */
+export function mailcowActions(state: DnsSetupState): ActionNeeded[] {
+  const linked = isMailcowLinked(state.policy.mailcow, { mailcowKey: state.mailcowHasKey ? "present" : "" });
+  if (linked) return [];
+  const mailcowIds = new Set(state.policy.profiles.filter((profile) => profile.role === "mail" && profile.mailcow).map((profile) => profile.id));
+  if (!mailcowIds.size) return [];
+  const redirectSources = new Set(state.policy.redirects.map((redirect) => redirect.source));
+  const affected = [
+    ...Object.entries(state.policy.assignments)
+      .filter(([domain, assigned]) => !redirectSources.has(domain) && assigned.mail && mailcowIds.has(assigned.mail))
+      .map(([domain]) => domain),
+    ...state.policy.redirects
+      .filter((redirect) => redirect.mailProfileId && mailcowIds.has(redirect.mailProfileId))
+      .map((redirect) => redirect.source),
+  ].sort();
+  if (!affected.length) return [];
+  return [{
+    title: "Mailcow is not connected",
+    reason: affected.length === 1
+      ? `${affected[0]} assigns Mailcow as its Mail role, so its sync is paused until you reconnect Mailcow or switch its Mail role`
+      : `${affected.length} domains assign Mailcow as their Mail role, so their sync is paused until you reconnect Mailcow or switch their Mail role`,
+    href: `${PAGE}#mailcow`,
+  }];
+}
+
 export const DNS_ACTIONS: ActionNeededCheck[] = [
   { id: "dns-permissions", check: () => permissionActions(dnsState()) },
+  { id: "dns-mailcow", check: () => mailcowActions(dnsState()) },
 ];
 
 function panelHostContext(): { panelHost: string | null; connected: boolean } {

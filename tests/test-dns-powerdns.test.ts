@@ -415,6 +415,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     await env.act("save-connection", { provider: "powerdns", label: "Primary NS", url: PDNS_URL, apiKey: PDNS_KEY });
     await env.act("save-profile", {
       name: "Mail",
+      role: "mail",
       mailcow: false,
       zone: { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] },
       records: [
@@ -423,7 +424,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
         { type: "TXT", name: "{domain}", content: "v=spf1 -all", proxied: false, ttl: 300, priority: null, apexOnly: false },
       ],
     });
-    await env.act("save-redirect", { source: "old.example", target: "https://new.example", status: 301, keepPath: true, keepQuery: true, profileId: "mail" });
+    await env.act("save-redirect", { source: "old.example", target: "https://new.example", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mail" });
     await env.apply("set-automatic", { automatic: true });
 
     // Local stand-in stays active and PowerDNS holds server A/AAAA (never 100::) plus MX/SPF.

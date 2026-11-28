@@ -341,8 +341,10 @@ defaults, and Panel gate so operators can mint minimal or combined tokens.
 `cli/addons.ts` under `dns.lock` -> `firewall-edge.lock` -> `cloudflare.lock`,
 with full rollback on failure) moves legacy `zone` blocks out of
 `dns/policy.json` profiles into `firewall/cloudflare-edge.json` without
-importing `addons/dns`. It aggregates active assigned/default profiles (falling
-back to all profiles when unassigned), sets `acmeFullSsl` when any relevant
+importing `addons/dns`. On a v1 file it aggregates active assigned/default
+profiles (falling back to all profiles when unassigned); on a v2 file, every
+profile still carrying a `zone` block or list of blocks, which DNS writes only
+from the v1 profiles in use. It sets `acmeFullSsl` when any relevant
 profile enabled it or `panelHost` was set, treats an unmanaged (`null` or
 omitted) SSL/TLS mode or Always Use HTTPS beside a set value as a disagreement
 (leaving the setting `null` with a `migrationNote` and `approved: false`), and

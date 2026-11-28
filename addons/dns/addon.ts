@@ -9,9 +9,10 @@ import { DNS_ACTIONS, DNS_SETUP } from "./setup";
 export const DNS_ADDON: AddonDefinition = {
   name: "dns",
   title: "DNS",
-  description: "Keep each site's DNS records to a profile across Cloudflare or PowerDNS, with Mailcow set up for its mail.",
+  description: "Keep each domain's HTTP and Mail DNS roles in sync across Cloudflare or PowerDNS, with optional Mailcow integration.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.3.0-rc.1", note: "DNS profiles now separate a domain's HTTP role (Site, Redirect, or DNS-only) from its independent Mail role (None, Mailcow, Google Workspace, DMARC, or custom record templates). Existing combinatorial profiles such as Web and Mailcow migrate automatically without changing live DNS records, and Mailcow now has its own tab that stays hidden behind a Connect Mailcow card until linked." },
     { in: "2.3.0-rc.1", note: "Cloudflare zone-wide edge settings (SSL/TLS mode, Always Use HTTPS, Let's Encrypt and webmail Full SSL rules, and WAF skip IPs) moved out of DNS profiles into Firewall's Cloudflare edge tab. Existing zone options migrate automatically on upgrade." },
     { in: "2.3.0-rc.1", note: "With Panel Tweaks' automatic SSL on, a new site whose DNS zone was just created now waits for its nameservers (shown to copy) instead of requesting a certificate that would fail. With DNS also on Automatic, self-signed sites made outside Create Site in the last 15 minutes, such as with clpctl, are queued for a certificate request once DNS is ready." },
     { in: "2.3.0-rc.1", note: "CloudPanel's Admin → Settings Custom Domain form now offers a Random hostname button, connected-zone suggestions, and a checkbox to write the DNS record before CloudPanel requests its Let's Encrypt certificate." },
@@ -37,7 +38,7 @@ export const DNS_ADDON: AddonDefinition = {
     label: "DNS",
     run: async (options) => {
       const { joined } = await executeDnsAction(["sync-sites"], (options ?? {}) as DnsActionOptions) as { joined: string[] };
-      return joined.length ? `${joined.join(", ")} joined the default profile` : null;
+      return joined.length ? `${joined.join(", ")} joined the default DNS roles` : null;
     },
   },
   certificates: {

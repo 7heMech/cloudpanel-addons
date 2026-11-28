@@ -215,6 +215,7 @@ export interface SectionTab {
   label: string;
   count?: number;
   attention?: "warn" | "bad";
+  badge?: { label: string; tone: BadgeTone };
   content: string;
 }
 
@@ -228,9 +229,11 @@ export function sectionShellHtml(id: string, label: string, tabs: SectionTab[], 
     const active = tab.id === initial;
     const tabDomId = `section-tab-${id}-${tab.id}`;
     const panelDomId = `section-panel-${id}-${tab.id}`;
-    const dot = tab.attention ? `<span class="section-dot tone-${tab.attention}" aria-hidden="true"></span>` : "";
-    const count = tab.count !== undefined ? `<span class="section-count">${tab.count}</span>` : "";
-    return `<a class="section-link${active ? " is-active" : ""}" id="${esc(tabDomId)}" role="tab" aria-selected="${active ? "true" : "false"}" aria-controls="${esc(panelDomId)}" tabindex="${active ? "0" : "-1"}" href="#${esc(tab.id)}" data-section-tab="${esc(tab.id)}">${esc(tab.label)}${dot}${count}</a>`;
+    const badgeTone = tab.badge && tab.badge.tone !== "plain" ? ` tone-${tab.badge.tone}` : "";
+    const badge = tab.badge ? `<span class="badge${badgeTone} section-badge">${esc(tab.badge.label)}</span>` : "";
+    const dot = !tab.badge && tab.attention ? `<span class="section-dot tone-${tab.attention}" aria-hidden="true"></span>` : "";
+    const count = !tab.badge && tab.count !== undefined ? `<span class="section-count">${tab.count}</span>` : "";
+    return `<a class="section-link${active ? " is-active" : ""}" id="${esc(tabDomId)}" role="tab" aria-selected="${active ? "true" : "false"}" aria-controls="${esc(panelDomId)}" tabindex="${active ? "0" : "-1"}" href="#${esc(tab.id)}" data-section-tab="${esc(tab.id)}">${esc(tab.label)}${badge}${dot}${count}</a>`;
   }).join("");
   const panels = tabs.map((tab) => `<section class="section-panel" id="${esc(`section-panel-${id}-${tab.id}`)}" role="tabpanel" aria-labelledby="${esc(`section-tab-${id}-${tab.id}`)}" data-section-panel="${esc(tab.id)}"${tab.id === initial ? "" : " hidden"}>${tab.content}</section>`).join("");
   return `<div class="section-shell" data-section-shell="${esc(id)}" data-default-section="${esc(initial)}"><nav class="section-nav" role="tablist" aria-label="${esc(label)}">${links}</nav><div class="section-panels">${panels}</div></div>`;
