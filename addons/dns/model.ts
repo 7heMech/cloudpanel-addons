@@ -38,6 +38,8 @@ export const PROXIABLE: readonly RecordType[] = ["A", "AAAA", "CNAME"];
 const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
 
 export const MAX_PROFILES = 48;
+// v1 migration can split one legacy profile into HTTP, Mail and redirect Mail profiles; only creating one is capped at MAX_PROFILES.
+const MAX_SAVED_PROFILES = MAX_PROFILES * 3;
 const MAX_RECORDS = 60;
 export const MAX_CONNECTIONS = 12;
 export const MAX_DOMAINS = 500;
@@ -649,7 +651,6 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
     redirectMail.set(profile.id, id);
   }
 
-  if (profiles.length > MAX_PROFILES) failAction(`at most ${MAX_PROFILES} profiles`);
   const mailIds = new Set(profiles.filter((profile) => profile.role === "mail").map((profile) => profile.id));
 
   const assignments: Record<string, SiteAssignment> = {};
@@ -818,7 +819,7 @@ export function parsePolicy(value: unknown): Policy {
     if (raw.version === 1) return migrateV1PolicyWithMapping(raw, base).policy;
 
     const profiles = (raw.profiles as unknown[]).map(parseProfile);
-    if (profiles.length > MAX_PROFILES) failAction(`at most ${MAX_PROFILES} profiles`);
+    if (profiles.length > MAX_SAVED_PROFILES) failAction(`at most ${MAX_SAVED_PROFILES} profiles`);
     const seenIds = new Set<string>();
     for (const profile of profiles) {
       if (seenIds.has(profile.id)) failAction(`profile ${profile.id} is listed twice`);

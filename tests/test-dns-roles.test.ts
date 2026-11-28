@@ -660,6 +660,42 @@ describe("v1 to v2 policy migration", () => {
     expect(byId(redirect.mail).mailcow).toBe(true);
   });
 
+  test("migrates a released v1 policy that splits into more than MAX_PROFILES, and only blocks creating more", async () => {
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    const legacy = Array.from({ length: 24 }, (_, i) => ({
+      id: `web-mail-${i}`, name: `Web and Mail ${i}`, mailcow: true,
+      records: [
+        row("A", "{domain}", `203.0.113.${i + 1}`),
+        row("CNAME", "www.{domain}", "{mailcow.host}"),
+        row("TXT", "_tag.{domain}", `v=${i}`),
+      ],
+    }));
+    const v1 = {
+      version: 1, automatic: false, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null,
+      mailcow: { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+      profiles: legacy,
+      assignments: Object.fromEntries(legacy.map((profile, i) => [`site${i}.example.com`, profile.id])),
+      redirects: legacy.map((profile, i) => ({ source: `old${i}.example.org`, target: "https://example.com", status: 301, keepPath: true, keepQuery: true, profileId: profile.id })),
+    };
+    const migrated = parsePolicy(v1);
+    expect(migrated.profiles).toHaveLength(72);
+    expect(parsePolicy(migrated)).toEqual(migrated);
+    const redirectMail = migrated.profiles.find((p) => p.id === migrated.assignments["old3.example.org"]!.mail)!;
+    expect(redirectMail.records.map((r) => `${r.type} ${r.name} ${r.content}`)).toEqual(["TXT _tag.{domain} v=3"]);
+    expect(redirectMail.mailcow).toBe(true);
+
+    const env = setup();
+    await env.connect();
+    mkdirSync(join(env.dir, "state"), { recursive: true });
+    writeFileSync(join(env.dir, "state", "policy.json"), JSON.stringify(v1), { mode: 0o600 });
+    await expect(env.act("save-profile", { name: "One More", role: "mail", mailcow: false, records: [row("TXT", "_more.{domain}", "x")] }))
+      .rejects.toThrow(`At most ${MAX_PROFILES} profiles can be created`);
+    const renamed = await env.act("save-profile", { ...redirectMail, name: "Renamed" });
+    expect(renamed.profiles).toHaveLength(72);
+  });
+
   test("treats {sub}.{zone} address rows as web rows when splitting a v1 profile", () => {
     const row = (type: string, name: string, content: string, priority: number | null = null) =>
       ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });

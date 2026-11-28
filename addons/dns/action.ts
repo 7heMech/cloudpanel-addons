@@ -1854,6 +1854,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     const taken = new Set(policy.profiles.map((profile) => profile.id));
     let id = existing?.id ?? nameSlug(String(body.name ?? ""), "the profile name");
     for (let n = 2; !existing && taken.has(id); n++) id = `${nameSlug(String(body.name), "the profile name", 36)}-${n}`;
+    if (!existing && policy.profiles.length >= MAX_PROFILES) failAction(`At most ${MAX_PROFILES} profiles can be created; delete an unused profile first`);
     const role = existing?.role ?? body.role;
     const profile = parseProfile({ ...body, id, ...(role !== undefined ? { role } : {}) });
     action.checkProfile(profile);

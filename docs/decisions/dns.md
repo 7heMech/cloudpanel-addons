@@ -158,6 +158,9 @@ deterministically without altering live DNS records:
   `profileId` has mail rows makes its source a DNS-only domain with
   `{ http: null, mail }` (a redirect with no mail adds nothing), and
   `defaultProfileId` maps to `defaultHttpProfileId` and `defaultMailProfileId`.
+- Splitting can leave more than the 48 profiles an operator may create (up to
+  three per v1 profile). The migrated policy loads and saves as it is; creating
+  a profile is refused until the operator deletes enough to go under 48.
 - If DNS saves a v2 `policy.json` before Firewall migrates legacy Cloudflare
   edge options, `legacyProfileZones` gives each migrated v2 HTTP and Mail
   profile the `zone` blocks of the v1 profiles folded into it, counting only
