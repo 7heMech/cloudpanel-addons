@@ -869,6 +869,38 @@ describe("zones and new sites", () => {
     expect(plan.held).toBeUndefined();
   });
 
+  test("a held new site waits for review before the shared mailbox may send as it", async () => {
+    const env = setup();
+    env.cf.zone("client.org", env.agency);
+    env.cf.record("client.org", { type: "A", name: "*.client.org", content: "198.51.100.9" });
+    env.mc.domains.add("example.net");
+    env.mc.key("example.net", "dkim");
+    env.mc.mailboxes.set("relay@example.net", { sender_acl: ["@example.net"] });
+    await env.connect();
+    await env.act("save-mailcow", {
+      url: "mail.example.net", key: MAILCOW_KEY, dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net",
+    });
+    await env.act("set-default", { httpProfileId: "web", mailProfileId: "mailcow" });
+    await env.automatic();
+    env.sites.push(site(8, "client.org", { createdAt: START }));
+    await env.act("sync-sites");
+    await env.act("reconcile");
+    const plan = (await env.act("list")).sites.find((entry) => entry.domain === "client.org")!.plan!;
+    expect(plan.held).toBe(true);
+    expect(plan.changes.find((change) => change.subject === "Mailcow sender permission")).toMatchObject({ waits: true });
+    expect(env.mc.mailboxes.get("relay@example.net")!.sender_acl).toEqual(["@example.net"]);
+
+    // The sender permission alone never holds a new site.
+    env.sites.push(site(9, "fresh.example.com", { createdAt: START }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((entry) => entry.domain === "fresh.example.com")!.plan!.held).toBeUndefined();
+    expect(env.mc.mailboxes.get("relay@example.net")!.sender_acl).toEqual(["@example.net", "@fresh.example.com"]);
+
+    const review = await env.act("assign", { domains: ["client.org"], httpProfileId: "web", mailProfileId: "mailcow" });
+    await env.act("confirm", { token: review.review!.token });
+    expect(env.mc.mailboxes.get("relay@example.net")!.sender_acl).toEqual(["@example.net", "@fresh.example.com", "@client.org"]);
+  });
+
   test("a new site whose zone cannot be read yet stays held until a check can plan it", async () => {
     const env = setup();
     env.cf.zone("client.org", env.agency);

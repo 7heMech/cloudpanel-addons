@@ -614,7 +614,9 @@ and its own address records at the site and `www`, are written at once with no
 review. If its profile would do more, such as update, delete or add beside an
 existing record at `*.{domain}` or another name, the site is held: its own
 address records are still written, and the rest waits, through every later
-check, until an administrator reviews it. While an apex site's wildcard waits
+check, until an administrator reviews it. That includes adding the site to the
+Mailcow shared mailbox's sender list, which alone never holds a site; Mailcow's
+domain and DKIM key are still made. While an apex site's wildcard waits
 for review, `www` is left out of its certificate names. Placing the site in a
 profile by hand, or the page's Review changes, runs the usual review and clears
 the hold. Readiness ignores the held changes. One read of the panel that finds

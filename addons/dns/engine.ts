@@ -184,6 +184,12 @@ type Resolution =
 
 const INACTIVE_ZONES = new Set(["moved", "deleted", "deactivated"]);
 const MAILCOW_PLACEHOLDER = /\{mailcow\./;
+const SENDER_PERMISSION = "Mailcow sender permission";
+
+/** A held site's sender permission waits with it, but never holds a site on its own. */
+function holdsSite(change: SitePlan["changes"][number]): boolean {
+  return Boolean(change.waits) && change.subject !== SENDER_PERMISSION;
+}
 
 function reason(error: unknown): string {
   return errorMessage(error);
@@ -542,11 +548,13 @@ export class DnsRun {
     const acl = this.acl.get(settings.sharedMailbox);
     if (acl === undefined) return;
     if (acl === null) {
-      plan.changes.push({ action: "note", subject: "Mailcow sender permission", detail: `This Mailcow does not report ${settings.sharedMailbox}'s sender list; allow @${domain} there` });
+      plan.changes.push({ action: "note", subject: SENDER_PERMISSION, detail: `This Mailcow does not report ${settings.sharedMailbox}'s sender list; allow @${domain} there` });
     } else if ("error" in acl) {
-      plan.changes.push({ action: "note", subject: "Mailcow sender permission", detail: acl.error });
+      plan.changes.push({ action: "note", subject: SENDER_PERMISSION, detail: acl.error });
     } else if (!aclAllows(acl, domain)) {
-      plan.changes.push({ action: "update", subject: "Mailcow sender permission", detail: `${settings.sharedMailbox} may send as @${domain}` });
+      plan.changes.push({
+        action: "update", subject: SENDER_PERMISSION, detail: `${settings.sharedMailbox} may send as @${domain}`, ...plan.held && { waits: true as const },
+      });
     }
   }
 
@@ -871,7 +879,7 @@ export class DnsRun {
       this.held.add(domain);
       const plan = this.planSite(site);
       // A site whose zone could not be read is held until a check can say what it would change.
-      if (plan.problems.length || plan.changes.some((change) => change.waits)) return true;
+      if (plan.problems.length || plan.changes.some(holdsSite)) return true;
       this.held.delete(domain);
       return false;
     });
@@ -883,7 +891,7 @@ export class DnsRun {
       const site = this.entries.find((candidate) => candidate.domain === domain);
       if (!site) return false;
       const plan = this.planSite(site);
-      if (plan.problems.length || plan.changes.some((change) => change.waits)) return false;
+      if (plan.problems.length || plan.changes.some(holdsSite)) return false;
       this.held.delete(domain);
       return true;
     });
@@ -1008,7 +1016,8 @@ export class DnsRun {
     try {
       const acl = await api.senderAcl(mailbox);
       if (acl === null) return;
-      const missing = ok.filter((domain) => !aclAllows(acl, domain));
+      // The shared mailbox's sender list waits for a held site's review.
+      const missing = ok.filter((domain) => !this.held.has(domain) && !aclAllows(acl, domain));
       if (!missing.length) return;
       await api.setSenderAcl(mailbox, [...acl, ...missing.map((domain) => `@${domain}`)]);
       this.logged(missing, "", "update", "Mailcow sender list", `${mailbox} may send as ${missing.map((domain) => `@${domain}`).join(", ")}`);
