@@ -490,6 +490,7 @@ class Action {
   readonly now: number;
   private cachedSites: PanelSite[] | null = null;
   private cachedRedirects: RedirectDomain[] | null = null;
+  private cachedEdge: { panel: PanelSite[]; hidden: Set<string> } | null = null;
   private cachedAddresses: Addresses | null = null;
   private readonly runs: DnsRun[] = [];
   private mailcowTrial: MailcowApi | null = null;
@@ -510,7 +511,7 @@ class Action {
   /** CloudPanel's sites, without the stand-ins `edgeStandIns` names. */
   sites(fresh = false): PanelSite[] {
     const hidden = this.edgeStandIns(fresh);
-    return this.panelSites(fresh).filter((site) => !hidden.has(site.domain));
+    return this.panelSites().filter((site) => !hidden.has(site.domain));
   }
 
   /**
@@ -518,15 +519,20 @@ class Action {
    * such as during a move there, so DNS never writes over its placeholders.
    * Redirects' state that cannot be trusted leaves out every stand-in, or
    * every site at a redirect's source when the stand-ins cannot be told.
+   * Read once per panel read, so one invocation sees one snapshot.
    */
   edgeStandIns(fresh = false): Set<string> {
+    const panel = this.panelSites(fresh);
+    if (!fresh && this.cachedEdge?.panel === panel) return this.cachedEdge.hidden;
     const marks = readStandInMarks(this.paths.standInsFile, this.paths.rootUid);
     const edge = readEdgeSources({ statusFile: this.paths.redirectsStatusFile, rootUid: this.paths.rootUid });
     const sources = marks ? null : new Set(this.redirects().map((redirect) => redirect.source));
-    return new Set(this.panelSites(fresh)
+    const hidden = new Set(panel
       .filter((site) => (marks ? isStandInSite(marks[site.domain], site, this.now) : sources!.has(site.domain))
         && (edge === null || edge.has(site.domain)))
       .map((site) => site.domain));
+    this.cachedEdge = { panel, hidden };
+    return hidden;
   }
 
   /** The domains added with no CloudPanel site, as DNS plans them: a site at one is that site's. */

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { composeProfiles, MAX_PROFILES, parsePolicy, parseProfile } from "../add
 import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
 import { renderProfile } from "../addons/dns/records";
 import { readEdgeConfig } from "../addons/firewall/edge";
+import * as redirectDomains from "../lib/redirect-domains";
 import { migrateCloudflareEdgeFromDns } from "../addons/firewall/migration";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
@@ -360,6 +361,20 @@ describe("Redirects' domains in DNS", () => {
     expect(state.sites.find((s) => s.domain === "old.example.org")).toMatchObject({ httpProfileId: "web" });
     policy = JSON.parse(readFileSync(join(env.dir, "state", "policy.json"), "utf8"));
     expect(policy.knownSiteIds).toContain(50);
+  });
+
+  test("one invocation reads Redirects' edge state once, so a stand-in is never both a site and a DNS-only domain", async () => {
+    const env = setup();
+    await env.connect();
+    env.redirect("old.example.org", "https://example.com", site(50, "old.example.org", { type: "static", user: "stand-in-1a2b3c4d", createdAt: START }));
+    env.redirectStatus([]);
+    const reads = spyOn(redirectDomains, "readEdgeSources");
+    try {
+      await env.act("list");
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   test("Redirects' state that cannot be trusted leaves every stand-in out rather than writing over it", async () => {
