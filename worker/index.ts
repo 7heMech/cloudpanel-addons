@@ -29,7 +29,8 @@ export interface Deps {
 
 export const REPO = "7heMech/cloudpanel-addons";
 export const INSTALL_URL = `https://github.com/${REPO}/releases/latest/download/install.sh`;
-const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases?per_page=30`;
+// The update check picks the newest of GitHub's latest 100, so the list carries as many.
+const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases?per_page=100`;
 const RELEASES_TTL_S = 300;
 const RELEASES_STALE_S = 86_400;
 const UPSTREAM_TIMEOUT_MS = 5000;
@@ -71,15 +72,40 @@ export function parseUsage(value: unknown): UsageReport | null {
   return { version, cloudpanel: cloudpanel ?? "", arch, addons: [...names] };
 }
 
+/** The body's bytes, or null once they pass `limit`, which stops reading it. */
+export async function readCapped(request: Request, limit: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return body;
+}
+
 async function usage(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return text(405, "POST only\n", { Allow: "POST" });
   const declared = Number(request.headers.get("Content-Length") ?? 0);
   if (declared > MAX_USAGE_BYTES) return text(413, "too large\n");
+  const bytes = await readCapped(request, MAX_USAGE_BYTES).catch(() => new Uint8Array());
+  if (!bytes) return text(413, "too large\n");
   let report: UsageReport | null = null;
   try {
-    const body = await request.text();
-    if (body.length > MAX_USAGE_BYTES) return text(413, "too large\n");
-    report = parseUsage(JSON.parse(body));
+    report = parseUsage(JSON.parse(new TextDecoder().decode(bytes)));
   } catch {
     report = null;
   }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type Deps, type Env, handle, INSTALL_URL, parseUsage, SERVER, trimReleases } from "../worker/index";
+import { type Deps, type Env, handle, INSTALL_URL, parseUsage, readCapped, SERVER, trimReleases } from "../worker/index";
 
 function fakeCache() {
   const store = new Map<string, Response>();
@@ -88,6 +88,40 @@ test("/usage refuses anything but a well-formed four-field report", async () => 
   expect(points).toHaveLength(0);
 });
 
+test("/usage counts bytes, not characters, so a multibyte body over 2 KiB is refused", async () => {
+  const { call, points } = setup();
+  const padded = JSON.stringify({ ...report, padding: "é".repeat(1100) });
+  expect(padded.length).toBeLessThan(2048);
+  expect(new TextEncoder().encode(padded).byteLength).toBeGreaterThan(2048);
+  expect((await call("/usage", post(padded))).status).toBe(413);
+  expect(points).toHaveLength(0);
+});
+
+test("/usage stops reading a body without Content-Length once it passes 2 KiB", async () => {
+  const { call, points } = setup();
+  let pulled = 0;
+  let cancelled = false;
+  const chunk = new TextEncoder().encode("x".repeat(1024));
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled++;
+      if (pulled > 1000) controller.close();
+      else controller.enqueue(chunk);
+    },
+    cancel() { cancelled = true; },
+  });
+  const res = await call("/usage", { method: "POST", body, duplex: "half" } as RequestInit);
+  expect(res.status).toBe(413);
+  expect(cancelled).toBe(true);
+  expect(pulled).toBeLessThan(10);
+  expect(points).toHaveLength(0);
+});
+
+test("readCapped returns the whole body when it fits", async () => {
+  const bytes = await readCapped(new Request("https://x/", { method: "POST", body: "{}" }), 2048);
+  expect(new TextDecoder().decode(bytes!)).toBe("{}");
+});
+
 test("parseUsage drops extra fields and repeated addons", () => {
   expect(parseUsage({ ...report, addons: ["dns", "dns"], domains: ["a.test"], ip: "1.2.3.4" })).toEqual({
     version: "2.3.0",
@@ -111,7 +145,7 @@ test("/releases.json proxies GitHub's list trimmed, and serves the next ask from
   expect(first.headers.get("Cache-Control")).toBe("public, max-age=300");
   expect(await first.json()).toEqual([{ tag_name: "v2.2.0", draft: false, prerelease: false }]);
   expect(calls).toHaveLength(1);
-  expect(calls[0]!.url).toBe("https://api.github.com/repos/7heMech/cloudpanel-addons/releases?per_page=30");
+  expect(calls[0]!.url).toBe("https://api.github.com/repos/7heMech/cloudpanel-addons/releases?per_page=100");
   expect(calls[0]!.headers.Authorization).toBeUndefined();
 
   const second = await call("/releases.json");

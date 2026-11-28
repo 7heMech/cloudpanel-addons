@@ -335,14 +335,17 @@ controls the repository can. `README.md` keeps the GitHub URL, which does not
 depend on the Worker; the landing page shows the short one. The installer still
 checks the binary it downloads against its published SHA-256 checksum.
 
-`/releases.json` asks GitHub for thirty releases and keeps the answer for five
-minutes in the colo's cache. When GitHub fails or rate-limits, the last list is
-served however old it is, and a `502` when there is none, which the manager
-treats as a miss and falls back to GitHub. An optional `GITHUB_TOKEN` secret
+`/releases.json` asks GitHub for its latest 100 releases, the same window the
+update check picks the newest from, and treats the answer as fresh for five
+minutes. It stores the list in the colo's cache for up to 24 hours. When GitHub
+fails or rate-limits, the stored list is served while the cache still holds
+it, and a `502` once it has expired or been evicted, which the manager treats
+as a miss and falls back to GitHub. An optional `GITHUB_TOKEN` secret
 lifts GitHub's unauthenticated rate limit; it is sent only to GitHub.
 
 `/usage` takes the four fields `lib/usage-share.ts` sends and nothing else, each
-checked for shape and the body capped at 2 KiB, and answers `204`. A report
+checked for shape and the body capped at 2 KiB, counted in bytes as it is read
+so a larger body is cut off rather than buffered, and answers `204`. A report
 writes one Workers Analytics Engine data point per enabled addon, with the
 addon, version, CloudPanel version and architecture, plus one under `*` for the
 server itself, which is the denominator for "how many servers run this addon".
