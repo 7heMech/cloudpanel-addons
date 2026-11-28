@@ -1013,7 +1013,8 @@ export async function executeRedirectsAction(argv: string[], options: RedirectsA
   const action = new Action(paths, options);
   if (verb === "list") return action.state();
   if (verb === "create-site-helper") return action.createSiteHelper();
-  if (verb === "sync-sites" && (!existsSync(paths.configFile) || !action.siteCandidates().length)) return { replaced: [], waiting: [] };
+  // A throwaway read: the locked run reads stand-ins afresh, after anything retired while it waited.
+  if (verb === "sync-sites" && (!existsSync(paths.configFile) || !new Action(paths, options).siteCandidates().length)) return { replaced: [], waiting: [] };
 
   const wait = verb === "reconcile" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "Redirects is busy checking Cloudflare; try again in a moment", async () => {

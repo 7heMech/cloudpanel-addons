@@ -1055,6 +1055,22 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.redirectRules("quiet.example")).toHaveLength(1);
   });
 
+  test("the new-sites hook reads stand-ins again once it holds the lock, so a stand-in retired meanwhile does not hide its site", async () => {
+    const env = setup();
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", { ...found("first.example", "https://example.com"), mode: "local" }));
+    await env.confirmed(await env.act("save-redirect", { ...found("second.example", "https://example.com"), mode: "local" }));
+    // What the scan before the lock saw: second.example still a stand-in.
+    const before = new FakeStandIns(env.sites);
+    before.current = { ...env.standIns.current };
+    await env.standIns.remove("second.example");
+    env.sites.push({ id: 60, domain: "www.first.example", user: "first", selfSigned: false });
+    env.sites.push({ id: 61, domain: "second.example", user: "second", selfSigned: false });
+    const adapters = [before, env.standIns];
+    const synced = await executeRedirectsAction(["sync-sites"], { ...env.options(), standIns: () => adapters.shift() ?? env.standIns });
+    expect(synced).toEqual({ replaced: ["first.example", "second.example"], waiting: [] });
+  });
+
   test("in Ask first, the removal waits as a pending change until Automatic is turned on", async () => {
     const env = setup();
     seededZone(env.cf, env.account, "ask.example", "https://example.com");
