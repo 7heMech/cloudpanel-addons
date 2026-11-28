@@ -145,10 +145,15 @@ deterministically without altering live DNS records:
   Mailcow") split into an HTTP profile and a Mail profile, deduplicating each
   half against existing profiles with the same `profileEffect`. An untouched,
   unused default "Web and Mailcow" profile on an unlinked install is dropped.
+- Web rows are A, AAAA and CNAME rows at `{domain}`, `www.{domain}` or
+  `*.{domain}` (`{sub}.{zone}` counts as `{domain}`) that use no `{mailcow.*}`
+  placeholder; a Mailcow-dependent row there stays in the Mail role, since
+  HTTP profiles refuse those placeholders.
 - For any v1 profile referenced by a redirect, all non-web rows (including
   custom TXT or CAA records) move into the Mail role and web rows stay in the
   HTTP role, so migrated redirects keep every custom record without copying web
-  rows.
+  rows. v1 redirects left out every address row at their own names, so when
+  the Mail half holds one, the redirect gets its own Mail profile without it.
 - Site assignments map from `profileId` to `{ http, mail }`, a redirect whose
   `profileId` has mail rows makes its source a DNS-only domain with
   `{ http: null, mail }` (a redirect with no mail adds nothing), and

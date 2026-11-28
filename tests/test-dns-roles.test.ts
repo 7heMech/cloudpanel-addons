@@ -583,6 +583,58 @@ describe("v1 to v2 policy migration", () => {
     expect(migrated.profiles.find((p) => p.id === "verify-tag")!.role).toBe("mail");
     expect(migrated.assignments["old.example.org"]).toEqual({ http: null, mail: "verify-tag" });
   });
+
+  test("keeps Mailcow-dependent web-name rows in Mail and leaves them off a redirect", () => {
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    const shared = {
+      id: "web-mail", name: "Web and Mail", mailcow: true,
+      records: [
+        row("A", "{domain}", "{ipv4}"),
+        row("CNAME", "www.{domain}", "{mailcow.host}"),
+        row("MX", "{domain}", "{mailcow.host}", 10),
+      ],
+    };
+    const migrated = parsePolicy({
+      version: 1, automatic: false, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null,
+      mailcow: { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+      profiles: [shared],
+      assignments: { "example.com": "web-mail" },
+      redirects: [{ source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, profileId: "web-mail" }],
+    });
+    expect(parsePolicy(migrated)).toEqual(migrated);
+    const byId = (id: string | null) => migrated.profiles.find((p) => p.id === id)!;
+    const site = migrated.assignments["example.com"]!;
+    expect(byId(site.http).records.map((r) => `${r.type} ${r.name}`)).toEqual(["A {domain}"]);
+    expect(byId(site.mail).records.map((r) => `${r.type} ${r.name}`)).toEqual(["CNAME www.{domain}", "MX {domain}"]);
+    const redirect = migrated.assignments["old.example.org"]!;
+    expect(redirect.http).toBeNull();
+    expect(byId(redirect.mail).records.map((r) => `${r.type} ${r.name}`)).toEqual(["MX {domain}"]);
+    expect(byId(redirect.mail).mailcow).toBe(true);
+  });
+
+  test("treats {sub}.{zone} address rows as web rows when splitting a v1 profile", () => {
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    const base = {
+      version: 1, automatic: false, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null, redirects: [],
+      mailcow: { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+    };
+    const migrated = parsePolicy({
+      ...base,
+      profiles: [
+        { id: "shop", name: "Shop", mailcow: false, records: [row("A", "{sub}.{zone}", "{ipv4}"), row("MX", "{domain}", "mx.example.net", 10)] },
+        { id: "autodiscover", name: "Autodiscover", mailcow: false, records: [row("CNAME", "autodiscover.{domain}", "mail.example.net")] },
+      ],
+      assignments: { "shop.example.com": "shop", "example.org": "autodiscover" },
+    });
+    const shop = migrated.assignments["shop.example.com"]!;
+    expect(migrated.profiles.find((p) => p.id === shop.http)!.records.map((r) => `${r.type} ${r.name}`)).toEqual(["A {sub}.{zone}"]);
+    expect(migrated.profiles.find((p) => p.id === shop.mail)!.records.map((r) => `${r.type} ${r.name}`)).toEqual(["MX {domain}"]);
+    expect(migrated.assignments["example.org"]).toEqual({ http: null, mail: "autodiscover" });
+  });
 });
 
 describe("Mailcow hide-until-linked tab and removal warning flow", () => {

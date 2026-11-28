@@ -397,8 +397,14 @@ function legacyAutomatic(raw: Record<string, unknown>): { automatic: boolean; cr
 
 const WEB_ROW_NAMES = new Set(["{domain}", "www.{domain}", "*.{domain}"]);
 
+/** An address row at the site's own names, which v1's redirect renderer left out. `{sub}.{zone}` always renders as `{domain}`. */
+function isAddressRow(row: RecordTemplate): boolean {
+  return (row.type === "A" || row.type === "AAAA" || row.type === "CNAME")
+    && WEB_ROW_NAMES.has(row.name.toLowerCase().replaceAll("{sub}.{zone}", "{domain}"));
+}
+
 function isWebRow(row: RecordTemplate): boolean {
-  return (row.type === "A" || row.type === "AAAA" || row.type === "CNAME") && WEB_ROW_NAMES.has(row.name);
+  return isAddressRow(row) && !MAILCOW_PLACEHOLDER.test(row.name + row.content);
 }
 
 function isMailRecord(row: RecordTemplate): boolean {
@@ -473,7 +479,7 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
   panelHost: string | null;
   knownSiteIds: number[];
   domains: string[];
-}): { policy: Policy; mapping: Map<string, SiteAssignment> } {
+}): { policy: Policy; mapping: Map<string, SiteAssignment>; redirectMail: Map<string, string | null> } {
   const legacyProfiles = (raw.profiles as unknown[]).map(parseLegacyProfile);
   if (legacyProfiles.length > MAX_PROFILES) failAction(`at most ${MAX_PROFILES} profiles`);
   const legacyIds = new Set<string>();
@@ -507,29 +513,33 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
     httpRows: RecordTemplate[];
     mailRows: RecordTemplate[];
     kind: "http" | "mail" | "both";
+    /** What its redirects published, when a redirect uses it. */
+    redirectRows: RecordTemplate[] | null;
   }
 
   const classified: Classified[] = legacyProfiles.map((profile) => {
     const usedByRedirect = legacyRedirectProfileIds.has(profile.id);
-    // In v1, renderRedirect dropped only web rows and kept every other row
-    // (including non-mail custom records such as TXT _verify). For any profile
-    // referenced by a redirect, classify all non-web rows into the Mail role
-    // so migrated redirects keep custom records without copying web rows.
+    // In v1, renderRedirect dropped only address rows at the redirect's own
+    // names and kept every other row (including non-mail custom records such
+    // as TXT _verify). For any profile referenced by a redirect, classify all
+    // non-web rows into the Mail role so migrated redirects keep custom
+    // records without copying web rows.
     const mailRows = usedByRedirect
       ? profile.records.filter((row) => !isWebRow(row))
       : profile.records.filter(isMailRecord);
     const httpRows = usedByRedirect
       ? profile.records.filter(isWebRow)
       : profile.records.filter((row) => !isMailRecord(row));
+    const redirectRows = usedByRedirect ? profile.records.filter((row) => !isAddressRow(row)) : null;
     const hasMail = profile.mailcow || mailRows.length > 0;
     const hasWeb = httpRows.some(isWebRow);
     if (!hasMail) {
-      return { profile, httpRows: profile.records, mailRows: [], kind: "http" };
+      return { profile, httpRows: profile.records, mailRows: [], kind: "http", redirectRows };
     }
     if (!hasWeb) {
-      return { profile, httpRows: [], mailRows: profile.records, kind: "mail" };
+      return { profile, httpRows: [], mailRows: profile.records, kind: "mail", redirectRows };
     }
-    return { profile, httpRows, mailRows, kind: "both" };
+    return { profile, httpRows, mailRows, kind: "both", redirectRows };
   });
 
   const profiles: Profile[] = [];
@@ -612,6 +622,33 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
     mapping.set(profile.id, { http: httpId, mail: mailId });
   }
 
+  // Pass 3: a redirect whose v1 profile put a Mailcow-dependent row at its own
+  // names never published it, so it gets a Mail profile without that row.
+  const redirectMail = new Map<string, string | null>();
+  for (const item of classified) {
+    if (!item.redirectRows) continue;
+    const { profile, redirectRows } = item;
+    const siteMail = mapping.get(profile.id)?.mail ?? null;
+    const siteMailProfile = profiles.find((candidate) => candidate.id === siteMail);
+    if (siteMailProfile && JSON.stringify(siteMailProfile.records) === JSON.stringify(redirectRows)) {
+      redirectMail.set(profile.id, siteMail);
+      continue;
+    }
+    if (!redirectRows.length && !profile.mailcow) {
+      redirectMail.set(profile.id, null);
+      continue;
+    }
+    const effect = effectKey("mail", redirectRows, profile.mailcow);
+    const existing = profiles.find((candidate) => candidate.role === "mail" && profileEffect(candidate) === effect);
+    if (existing) {
+      redirectMail.set(profile.id, existing.id);
+      continue;
+    }
+    const id = allocateId(`${profile.id}-redirect-mail`, takenIds);
+    profiles.push({ id, name: trimName(profile.name, " (Redirect mail)"), role: "mail", records: redirectRows, mailcow: profile.mailcow });
+    redirectMail.set(profile.id, id);
+  }
+
   if (profiles.length > MAX_PROFILES) failAction(`at most ${MAX_PROFILES} profiles`);
   const mailIds = new Set(profiles.filter((profile) => profile.role === "mail").map((profile) => profile.id));
 
@@ -628,7 +665,7 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
     const item = entry as Record<string, unknown>;
     const source = safeHostname(item.source);
     const legacyId = typeof item.profileId === "string" ? item.profileId : null;
-    const mail = legacyId ? (mapping.get(legacyId)?.mail ?? null) : null;
+    const mail = legacyId ? (redirectMail.get(legacyId) ?? null) : null;
     if (source && mail && mailIds.has(mail)) {
       assignments[source] = { http: assignments[source]?.http ?? null, mail };
       domains.add(source);
@@ -659,6 +696,7 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
       panelHost: base.panelHost,
     },
     mapping,
+    redirectMail,
   };
 }
 
@@ -725,8 +763,9 @@ export function legacyProfileZones(onDisk: unknown): Map<string, unknown> {
     return zones;
   }
   let mapping: Map<string, SiteAssignment>;
+  let redirectMail: Map<string, string | null>;
   try {
-    mapping = migrateV1PolicyWithMapping(raw, parsePolicyBase(raw)).mapping;
+    ({ mapping, redirectMail } = migrateV1PolicyWithMapping(raw, parsePolicyBase(raw)));
   } catch {
     // Fall back to direct id matching if the legacy policy cannot be parsed.
     return zones;
@@ -743,7 +782,7 @@ export function legacyProfileZones(onDisk: unknown): Map<string, unknown> {
   for (const [legacyId, assigned] of mapping) {
     if (!zones.has(legacyId) || (used.size > 0 && !used.has(legacyId))) continue;
     const legacyZone = zones.get(legacyId);
-    for (const target of [assigned.http, assigned.mail]) {
+    for (const target of [assigned.http, assigned.mail, redirectMail.get(legacyId)]) {
       if (!target) continue;
       const distinct = folded.get(target) ?? new Map<string, unknown>();
       distinct.set(JSON.stringify(legacyZone), legacyZone);
