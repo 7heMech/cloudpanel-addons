@@ -11,7 +11,8 @@
   var input = form.querySelector('input[id$="_domainName"], input[name$="[domainName]"]');
   if (!input) return;
 
-  var url = box.getAttribute('data-url');
+  var MOUNT = '/addons/redirects';
+  if (box.getAttribute('data-url') !== MOUNT) return;
   var ACTION_LABELS = { create: 'Create', update: 'Update', delete: 'Delete', note: 'Note' };
 
   function normalizeHost(value) {
@@ -30,7 +31,7 @@
   function ensureCsrf() {
     var existing = readCsrf();
     if (existing) return Promise.resolve(existing);
-    return fetch(url + '/api/session', { credentials: 'same-origin' }).then(function () {
+    return fetch(MOUNT + '/api/session', { credentials: 'same-origin' }).then(function () {
       var token = readCsrf();
       if (!token) throw new Error('Redirects did not answer. Reload the page and try again.');
       return token;
@@ -39,7 +40,7 @@
 
   function postJson(path, body) {
     return ensureCsrf().then(function (token) {
-      return fetch(url + path, {
+      return fetch(MOUNT + path, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {
@@ -261,7 +262,7 @@
       });
 
       var manageLink = el('a', 'clp-redir-cs-link', 'Open Redirects');
-      manageLink.href = url + '/';
+      manageLink.href = MOUNT + '/';
       actions.appendChild(replaceBtn);
       actions.appendChild(manageLink);
 
@@ -334,8 +335,8 @@
   }
 
   // Warm CSRF cookie and load local redirect list; never calls Cloudflare on page load.
-  fetch(url + '/api/session', { credentials: 'same-origin' }).catch(function () {});
-  fetch(url + '/api/create-site-helper', { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(function (response) {
+  fetch(MOUNT + '/api/session', { credentials: 'same-origin' }).catch(function () {});
+  fetch(MOUNT + '/api/create-site-helper', { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(function (response) {
     return response.ok ? response.json() : null;
   }).then(function (reply) {
     var data = reply && reply.ok ? reply.data : null;

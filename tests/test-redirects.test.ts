@@ -26,6 +26,7 @@ import {
 import { REDIRECTS_VERBS } from "../addons/redirects/verbs";
 import type { CfRule } from "../lib/cloudflare/api";
 import { removeCloudflareConnection, saveCloudflareConnection } from "../lib/cloudflare/store";
+import { mountPath } from "../lib/mount";
 import { issuedForAll } from "../lib/panel-custom-domain";
 import { isStandInSite, ownsStandInSite, standInDomains } from "../lib/stand-ins";
 import { FakeCloudflare, hexId } from "./fixtures/dns-api";
@@ -742,6 +743,15 @@ describe("Create Site replacement flow and silent-deletion protection", () => {
     expect(script).not.toContain("addEventListener('submit'");
     expect(script).not.toContain('addEventListener("submit"');
     expect(script).not.toMatch(/\.setAttribute\(['"]name['"]/);
+  });
+
+  test("Create Site helper builds every URL from its fixed mount path, never from the page's markup", () => {
+    expect(createSiteRedirectSnippet(mountPath("redirects"))).toContain(`data-url="${mountPath("redirects")}"`);
+    const script = readFileSync(join(REPO, "addons/redirects/inject/create-site.client.js"), "utf8");
+    expect(script).toContain(`var MOUNT = '${mountPath("redirects")}';`);
+    expect(script).not.toMatch(/(?:href|fetch\()\s*=?\s*[^'M\s]*url/);
+    expect(script.match(/getAttribute\('data-url'\)/g)).toHaveLength(1);
+    expect(script).toContain("if (box.getAttribute('data-url') !== MOUNT) return;");
   });
 });
 
