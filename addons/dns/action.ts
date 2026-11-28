@@ -1084,6 +1084,7 @@ class Action {
     return {
       managed: true,
       ...ready,
+      ...(nameServers?.length ? { nameServers } : {}),
       ...(ready.zone && provider ? { provider } : {}),
       ...(zoneCreated ? { zoneCreated: true } : {}),
       certificateNames: ready.ready ? plan!.certificateNames : [],

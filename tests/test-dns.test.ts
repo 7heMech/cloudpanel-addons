@@ -1093,6 +1093,19 @@ describe("automatic SSL", () => {
       certificateNames: [],
     });
 
+    // A subsequent read of a pending zone that omits nameservers still returns the nameservers from the recent creation record.
+    env.cf.zones.find((z) => z.name === "example.org")!.name_servers = [];
+    const recovered = await env.act<ProvisionReply>("provision", undefined, ["--domain=fresh-zone.example.org"]);
+    expect(recovered).toMatchObject({
+      managed: true,
+      ready: false,
+      zone: "example.org",
+      nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      provider: "cloudflare",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+
     // Once Cloudflare verifies delegation and marks the zone active, createdZones clears immediately.
     env.cf.zones.find((z) => z.name === "example.org")!.status = "active";
     const active = await env.act<ProvisionReply>("provision", undefined, ["--domain=fresh-zone.example.org"]);
