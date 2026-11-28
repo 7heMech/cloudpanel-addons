@@ -98,12 +98,18 @@ When a site is deleted from CloudPanel while DNS manages it, its records stay in
 Cloudflare until you choose **Remove records** or **Keep**; if its zone is deleted
 in Cloudflare, they leave the list on their own. A Mailcow domain is never deleted.
 
-## Redirect domains
+## Domains without a site
 
-Redirects run in the **Redirects** addon. Each redirect domain also appears in
-**Sites** with HTTP role **Redirect**, so you can give it a **Mail role** and
-keep its mail records and Mailcow setup. While a stand-in site on this server
-serves a redirect, DNS points its hosts here.
+To manage a domain that has no CloudPanel site, such as a redirect's source
+that still receives mail, choose **Add domain** in **Sites** and give it a
+**Mail role** (and an HTTP profile if it needs one). Remove it from its
+**Details**; its records stay until you remove them under **Records of deleted
+sites**. If you later create a site at the domain, the site takes it over.
+
+Redirects run in the **Redirects** addon, which never manages mail. A row whose
+domain a redirect covers shows **Redirected in Redirects**; DNS still keeps its
+records. Redirects' stand-in sites are ordinary sites here, except while their
+redirect is served at Cloudflare, when DNS leaves them out.
 
 ## Panel hostname
 

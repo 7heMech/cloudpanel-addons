@@ -16,8 +16,9 @@ when the policy is parsed.
 Redirects manages HTTP forwarding only. It never manages mail records (`MX`,
 `SPF`, `DKIM`, `DMARC`), verification `TXT` records, `SRV`, or `CAA` records,
 and it does not import from `addons/dns`. DNS reads Redirects' saved state
-through `lib/redirect-domains.ts` and keeps each redirect domain's Mail role, and
-points a stand-in's hosts at this server; see [DNS](dns.md#redirect-domains).
+through `lib/redirect-domains.ts` to warn on the rows a redirect covers and to
+leave out a stand-in served at the edge; a redirect domain's mail is a DNS-only
+domain in DNS. See [DNS](dns.md#redirects-domains-and-stand-ins).
 
 ## Cloudflare Single Redirects and placeholders
 
@@ -206,8 +207,8 @@ Upgrading from a release where DNS owned redirect domains runs
 `migrateCloudflareFromDns` and Firewall's Cloudflare edge migration. It validates every touched file with
 `isTrustedFile`, moves `redirects`, `standins.json`, redirect holds, tracked
 `redirectRules`, Cloudflare `zoneChoices`, and Cloudflare `connectionIds` into
-`/var/lib/clp-addons/redirects/`, hands each redirect's `profileId` to DNS as
-the domain's Mail role (through DNS's own `upgradeSavedPolicy`, passed in by
+`/var/lib/clp-addons/redirects/`, hands each redirect's `profileId` with mail
+rows to DNS as a DNS-only domain with that Mail role (through DNS's own `upgradeSavedPolicy`, passed in by
 `cli/addons.ts` so Redirects never imports DNS), marks redirects that were
 on PowerDNS as `mode: "local"` while keeping their custom stand-in `hosts`, and
 cleans those fields from DNS. A redirect is on PowerDNS when its legacy plan
