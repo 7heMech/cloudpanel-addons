@@ -61,9 +61,11 @@ When no Cloudflare connection exists, when no connected Cloudflare zone matches
 the redirect's source host, or when the operator sets `mode: "local"`, Redirects
 serves the redirect from this server with a CloudPanel static site whose Nginx
 vhost returns the configured status and target URL and serves
-`/.well-known/acme-challenge/` from the site's root. If a connected Cloudflare
-account errors during discovery for an `auto` redirect, planning fails closed
-and does not fall back to creating a stand-in site.
+`/.well-known/acme-challenge/` from the site's root. If any Cloudflare
+connection fails discovery, every `auto` redirect fails closed, even one that
+another connection's zone matches, because the failed connection could hold a
+longer matching zone. It neither writes to Cloudflare nor falls back to a
+stand-in site.
 
 Stand-in vhosts are written to both CloudPanel's SQLite database and Nginx
 through `lib/site-vhost.ts` so CloudPanel keeps the redirect rules when it
@@ -116,8 +118,9 @@ place on an active zone, Redirects deletes the retired stand-in site.
 
 Deleting a redirect or replacing it checks connected Cloudflare zones for an
 existing rule even when the redirect is currently `mode: "local"` or served by a
-stand-in. If Cloudflare cannot be read or has conflicting rules, deletion blocks
-rather than orphaning a Cloudflare rule. On confirmation, Redirects deletes the
+stand-in. If any Cloudflare connection fails discovery, or a zone cannot be read
+or has conflicting rules, deletion blocks rather than orphaning a Cloudflare
+rule. On confirmation, Redirects deletes the
 Cloudflare rule and any stand-in site while leaving non-web DNS records
 untouched.
 

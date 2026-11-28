@@ -282,18 +282,20 @@ export class RedirectsRun {
       ?? group[0];
   }
 
+  /** Why the zone inventory is incomplete: a connection that failed could hold a longer matching zone or another rule. */
+  private discoveryFailure(): string | null {
+    const failed = this.connections.filter((connection) => !connection.active);
+    return failed.length ? `Cloudflare could not be read: ${failed.map((c) => c.error).join("; ")}` : null;
+  }
+
   /** Resolves a redirect domain to a Cloudflare zone, a local stand-in site, a disambiguation choice, or a read error. */
   private resolve(redirect: Redirect): Resolution {
     if (redirect.mode === "local" || !this.context.connections.length) return { kind: "local" };
+    const failure = this.discoveryFailure();
+    if (failure) return { kind: "unreachable", reason: failure };
     const source = redirect.source;
     const matches = this.zoneRefs.filter(({ zone }) => !INACTIVE_ZONES.has(zone.status) && (source === zone.name || source.endsWith(`.${zone.name}`)));
-    if (!matches.length) {
-      const failed = this.connections.filter((connection) => !connection.active);
-      if (failed.length) {
-        return { kind: "unreachable", reason: `Cloudflare could not be read: ${failed.map((c) => c.error).join("; ")}` };
-      }
-      return { kind: "local" };
-    }
+    if (!matches.length) return { kind: "local" };
     const longest = Math.max(...matches.map(({ zone }) => zone.name.length));
     const candidates = matches.filter(({ zone }) => zone.name.length === longest);
     const name = candidates[0]!.zone.name;
@@ -694,6 +696,8 @@ export class RedirectsRun {
   ): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
     const redirect = this.redirects.get(source);
     if (!redirect) return null;
+    const failure = this.discoveryFailure();
+    if (failure) return { problem: failure };
     const inspect = (ref: ZoneRef): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null => {
       const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
       if (!state?.rulesetLoaded || state.error) return { problem: state?.error ?? `${ref.zone.name} could not be read` };
@@ -714,10 +718,6 @@ export class RedirectsRun {
     }
 
     const cfRefs = this.cloudflareRedirectZones(source, tracked);
-    const failedCf = this.connections.filter((connection) => !connection.active);
-    if (failedCf.length && (tracked ? !cfRefs.some((ref) => ref.zone.id === tracked.zoneId) : !cfRefs.length)) {
-      return { problem: `Cloudflare could not be read: ${failedCf.map((c) => c.error).join("; ")}` };
-    }
     const hits: { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] }[] = [];
     for (const ref of cfRefs) {
       const checked = inspect(ref);

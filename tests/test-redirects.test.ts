@@ -618,6 +618,33 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     for (const record of nonWeb) expect(env.cf.recordsOf("hazon.uk").map((r) => JSON.stringify(r))).toContain(record);
   });
 
+  test("a connection that fails discovery blocks zone selection and rule lookups even when another connection matches", async () => {
+    const env = setup();
+    const account2 = env.cf.account("Second Account");
+    env.cf.token(TOKEN_TWO, { owner: "user", accounts: [account2], zoneEdit: true });
+    env.cf.zone("example.com", env.account);
+    const child = env.cf.zone("sub.example.com", account2);
+    env.cf.rulesets.set(`${child.id}:http_request_dynamic_redirect`, {
+      id: hexId(), rules: [externalRule('http.host eq "loc.sub.example.com"', "https://elsewhere.example")],
+    });
+    await env.act("save-connection", { token: TOKEN, label: "Parent" });
+    await env.act("save-connection", { token: TOKEN_TWO, label: "Child" });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", {
+      ...found("loc.sub.example.com", "https://elsewhere.example"), mode: "local",
+    }));
+
+    env.cf.tokens.get(TOKEN_TWO)!.status = "disabled";
+    const auto = await env.act("save-redirect", found("go.sub.example.com", "https://example.net"));
+    expect(auto.review!.blocked).toBe(true);
+    expect(auto.review!.sites[0]!.zone).toBeNull();
+    expect(auto.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
+
+    const replace = await env.act("prepare-replace", { source: "loc.sub.example.com" });
+    expect(replace.review!.blocked).toBe(true);
+    expect(replace.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
+  });
+
   test("standInBody renders all redirect combinations and custom hosts", () => {
     const body = (keepPath: boolean, keepQuery: boolean) =>
       standInBody("thepastormax.com", { target: "https://maksimasenov.com", status: 301, keepPath, keepQuery });
