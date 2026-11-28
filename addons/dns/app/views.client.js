@@ -306,13 +306,18 @@ async function dnsAssignSelected() {
   if (changeHttp) body.httpProfileId = httpId;
   if (changeMail) body.mailProfileId = mailId;
   const clearingOnly = (!changeHttp || httpId === null) && (!changeMail || mailId === null);
+  const keepsRole = moving.some(function (row) {
+    return (!changeHttp && row.dataset.httpProfileId) || (!changeMail && row.dataset.mailProfileId);
+  });
   if (clearingOnly || !dnsState.automatic) {
     const parts = [];
     if (changeHttp) parts.push('HTTP: ' + (httpId ? dnsProfile(httpId).name : 'DNS-only'));
     if (changeMail) parts.push('Mail: ' + (mailId ? dnsProfile(mailId).name : 'None'));
     const accepted = await confirmAction({
       title: 'Update ' + plural(moving.length, 'site') + ' (' + parts.join(', ') + ')?',
-      text: clearingOnly ? 'Existing DNS records are left as they are.' : 'DNS asks first: their DNS is checked against these roles and nothing is changed.',
+      text: !clearingOnly ? 'DNS asks first: their DNS is checked against these roles and nothing is changed.'
+        : dnsState.automatic && keepsRole ? 'The records of the roles you clear are left as they are. DNS may ask to apply changes for the role a site keeps.'
+          : 'Existing DNS records are left as they are.',
       confirmLabel: 'Assign',
     });
     if (!accepted) return;

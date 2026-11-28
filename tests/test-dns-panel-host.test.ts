@@ -268,6 +268,24 @@ describe("the panel hostname", () => {
     expect(makeHelpers({ zones: ["a.example", "b.example"], panelHost: null }).dnsPanelBase("", "")).toBe("");
   });
 
+  test("clearing one role from a site that keeps the other does not promise every record stays as it is", async () => {
+    const clientSource = readFileSync(join(import.meta.dir, "../addons/dns/app/views.client.js"), "utf8");
+    const block = clientSource.slice(clientSource.indexOf("async function dnsAssignSelected()"), clientSource.indexOf("async function dnsSetDefault("));
+    const dialogText = async (automatic: boolean, row: Record<string, string>) => {
+      const asked: string[] = [];
+      const pickers: Record<string, { value: string }> = { "bulk-http": { value: "-" }, "bulk-mail": { value: "" } };
+      const run = new Function("dnsState", "selectedRows", "CLP_ROOT", "notify", "confirmAction", "dnsPost", "dnsProfile", "plural",
+        `${block}\nreturn dnsAssignSelected();`);
+      await run({ automatic }, () => [{ dataset: { domain: "example.com", ...row } }], { getElementById: (id: string) => pickers[id] },
+        () => {}, async (options: { text: string }) => { asked.push(options.text); return false; }, () => {},
+        (id: string) => ({ name: id }), (n: number, word: string) => `${n} ${word}`);
+      return asked[0];
+    };
+    expect(await dialogText(true, { httpProfileId: "web", mailProfileId: "google" })).toContain("DNS may ask to apply changes for the role a site keeps");
+    expect(await dialogText(true, { httpProfileId: "web" })).toBe("Existing DNS records are left as they are.");
+    expect(await dialogText(false, { httpProfileId: "web", mailProfileId: "google" })).toBe("Existing DNS records are left as they are.");
+  });
+
   test("panel-host-helper answers from local state alone without calling Cloudflare", async () => {
     const env = setup();
     const before = await env.act<PanelHostHelper>("panel-host-helper");
