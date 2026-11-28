@@ -61,9 +61,12 @@ function setup() {
   const connect = () => act("save-connection", { token: TOKEN });
   const redirectSources: { source: string; target: string }[] = [];
   /** Adds a redirect to Redirects' saved state, as the Redirects addon would, and gives it a Mail role in DNS. */
-  const redirect = async (source: string, target: string, mailProfileId: string | null = null): Promise<void> => {
+  const redirect = async (source: string, target: string, mailProfileId: string | null = null, standIn = false): Promise<void> => {
     redirectSources.push({ source, target });
     mkdirSync(join(dir, "redirects"), { recursive: true });
+    if (standIn) {
+      writeFileSync(paths.standInsFile, JSON.stringify({ [source]: { target, status: 301, keepPath: true, keepQuery: true, siteUser: "stand-in-1a2b3c4d", createdAt: START, certificate: { attempts: 0, nextAt: 0, done: false } } }), { mode: 0o600 });
+    }
     writeFileSync(paths.redirectsPolicyFile, JSON.stringify({ version: 1, automatic: true, held: [], zoneChoices: {},
       redirects: redirectSources.map((entry) => ({ ...entry, status: 301, keepPath: true, keepQuery: true })) }), { mode: 0o600 });
     if (mailProfileId) await act("assign", { domains: [source], mailProfileId });
@@ -216,6 +219,33 @@ describe("composable HTTP and Mail roles", () => {
     expect(state.sites.find((s) => s.domain === "fresh.example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc" });
     expect(state.sites.find((s) => s.domain === "example.com")).toMatchObject({ httpRole: "dns-only", httpProfileId: null, mailProfileId: null });
     expect(env.records("example.com")).toContain("A fresh.example.com 203.0.113.10 proxied");
+  });
+});
+
+describe("redirect domains run by the Redirects addon", () => {
+  test("DNS writes a Cloudflare-served redirect's Mail role and leaves its placeholder to Redirects", async () => {
+    const env = setup();
+    env.cf.record("old.example.org", { type: "AAAA", name: "old.example.org", content: "100::", proxied: true, ttl: 1 });
+    await env.connect();
+    await env.redirect("old.example.org", "https://example.com", "google");
+    await env.apply("set-automatic", { automatic: true });
+    const records = env.records("old.example.org");
+    expect(records).toContain("AAAA old.example.org 100:: proxied");
+    expect(records).toContain("MX old.example.org smtp.google.com");
+    expect(records.filter((r) => /^(A|AAAA) old\.example\.org /.test(r))).toEqual(["AAAA old.example.org 100:: proxied"]);
+  });
+
+  test("DNS points a stand-in's hosts at this server, unproxied, while the stand-in serves the redirect", async () => {
+    const env = setup();
+    await env.connect();
+    await env.redirect("old.example.org", "https://example.com", null, true);
+    await env.apply("set-automatic", { automatic: true });
+    expect(env.records("old.example.org").filter((r) => /^(A|AAAA) /.test(r))).toEqual([
+      "A old.example.org 203.0.113.10",
+      "A www.old.example.org 203.0.113.10",
+      "AAAA old.example.org 2001:db8::10",
+      "AAAA www.old.example.org 2001:db8::10",
+    ]);
   });
 });
 

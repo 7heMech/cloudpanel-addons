@@ -15,6 +15,7 @@ import {
   CREATE_SITE_TARGETS, NATIVE_SITE_TYPES, createSiteRedirectSnippet,
 } from "../addons/redirects/inject/create-site";
 import { migrateRedirectsFromDns, redirectsMigrationPending } from "../addons/redirects/migration";
+import { upgradeSavedPolicy } from "../addons/dns/model";
 import { parsePolicy, parseRedirect, type Redirect } from "../addons/redirects/model";
 import {
   foundRedirect, isOurRedirectRef, legacyDnsRedirectRef, patternMatchesHost, redirectRef, redirectRuleState, wholeHostHosts,
@@ -1113,6 +1114,42 @@ describe("Create Site replacement flow and silent-deletion protection", () => {
 });
 
 describe("migration from addons/dns and DNS stand-in exclusion", () => {
+  test("hands each redirect's mail profile to DNS as the domain's Mail role through DNS's own upgrade", () => {
+    const dir = mkdtempSync(join(tmpdir(), "redirects-mig-mail-"));
+    dirs.push(dir);
+    const dnsDir = join(dir, "dns");
+    const redirectsDir = join(dir, "redirects");
+    mkdirSync(dnsDir, { recursive: true });
+    writeFileSync(join(dir, "dns.conf"), "enabled\n");
+    const mx = { type: "MX", name: "{domain}", content: "mail.example.net", proxied: false, ttl: 1, priority: 10, apexOnly: false };
+    const a = { type: "A", name: "{domain}", content: "{ipv4}", proxied: true, ttl: 1, priority: null, apexOnly: false };
+    writeFileSync(join(dnsDir, "policy.json"), JSON.stringify({
+      version: 1, automatic: true, createIn: null, connections: [], defaultProfileId: null, knownSiteIds: [1], held: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null,
+      mailcow: { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+      profiles: [
+        { id: "web", name: "Web", mailcow: false, records: [a] },
+        { id: "web-mail", name: "Web and mail", mailcow: false, records: [a, mx] },
+      ],
+      assignments: { "site.example.com": "web" },
+      redirects: [{ source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, profileId: "web-mail" }],
+    }), { mode: 0o600 });
+
+    const undo = migrateRedirectsFromDns(() => {}, {
+      dnsDir, redirectsDir, dnsConfigFile: join(dir, "dns.conf"), redirectsConfigFile: join(dir, "redirects.conf"), rootUid: process.getuid!(),
+      upgradeDnsPolicy: upgradeSavedPolicy,
+    });
+    expect(undo).not.toBeNull();
+    const dnsPolicy = JSON.parse(readFileSync(join(dnsDir, "policy.json"), "utf8"));
+    expect(dnsPolicy.version).toBe(2);
+    expect(dnsPolicy.redirects).toBeUndefined();
+    expect(dnsPolicy.assignments).toEqual({ "site.example.com": { http: "web", mail: null }, "old.example.org": { http: null, mail: "web-mail-mail" } });
+    expect(dnsPolicy.profiles.find((profile: { id: string }) => profile.id === "web-mail-mail").records).toEqual([mx]);
+    expect(JSON.parse(readFileSync(join(redirectsDir, "policy.json"), "utf8")).redirects.map((redirect: { source: string }) => redirect.source)).toEqual(["old.example.org"]);
+    undo!();
+    expect(JSON.parse(readFileSync(join(dnsDir, "policy.json"), "utf8")).version).toBe(1);
+  });
+
   test("migrates redirects, stand-ins, PowerDNS local mode, holds, and CF zone choices, and rolls back verbatim", () => {
     const dir = mkdtempSync(join(tmpdir(), "redirects-mig-"));
     dirs.push(dir);
