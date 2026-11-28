@@ -252,7 +252,7 @@ export function migrateRedirectsFromDns(
         checkedAt?: string | null;
         plans?: Record<string, unknown>;
         connectionIds?: string[];
-        redirectRules?: Record<string, TrackedRedirectRule>;
+        redirectRules?: Record<string, TrackedRedirectRule | TrackedRedirectRule[]>;
       }>(redirStatusPath, uid, () => ({ checkedAt: null, plans: {} }));
       const nextStatus = {
         checkedAt: existingStatus.checkedAt ?? null,

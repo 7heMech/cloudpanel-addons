@@ -178,8 +178,8 @@ interface Status {
   plans: Record<string, RedirectPlan>;
   /** Cloudflare connection ids saved when Redirects last looked; absent before its first look. */
   connectionIds?: string[];
-  /** Last known Cloudflare zone holding a redirect's edge rule, kept across provider switches until deleted. */
-  redirectRules?: Record<string, TrackedRedirectRule>;
+  /** Every Cloudflare zone where a redirect's edge rule was seen, kept across provider switches until a read shows it gone. */
+  redirectRules?: Record<string, TrackedRedirectRule[]>;
 }
 
 interface Pending {
@@ -226,7 +226,12 @@ class Files {
   }
 
   status(): Status {
-    return { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
+    const status = { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
+    if (status.redirectRules) {
+      const stored = status.redirectRules as Record<string, TrackedRedirectRule | TrackedRedirectRule[]>;
+      status.redirectRules = Object.fromEntries(Object.entries(stored).map(([source, tracked]) => [source, [tracked].flat()]));
+    }
+    return status;
   }
 
   saveStatus(status: Status): void {
@@ -385,15 +390,15 @@ class Action {
     const plansByDomain = domains === "all"
       ? {}
       : Object.fromEntries(Object.entries(status.plans).filter(([domain]) => currentSources.has(domain)));
-    const redirectRules: Record<string, TrackedRedirectRule> = { ...(status.redirectRules ?? {}) };
+    const redirectRules: Record<string, TrackedRedirectRule[]> = { ...(status.redirectRules ?? {}) };
     for (const domain of Object.keys(redirectRules)) {
       if (!currentSources.has(domain)) delete redirectRules[domain];
     }
     for (const plan of plans) {
       if (domains !== "all" && !domains.includes(plan.domain)) continue;
       plansByDomain[plan.domain] = plan;
-      const tracked = run.trackedRule(plan.domain);
-      if (tracked) redirectRules[plan.domain] = tracked;
+      const tracked = run.trackedRules(plan.domain);
+      if (tracked.length) redirectRules[plan.domain] = tracked;
       else delete redirectRules[plan.domain];
     }
     this.files.saveStatus({
@@ -443,7 +448,7 @@ class Action {
       const plan = status.plans[redirect.source];
       const standIn = standIns[redirect.source];
       const tracked = status.redirectRules?.[redirect.source];
-      const zoneName = plan?.zone?.name ?? tracked?.zoneName ?? null;
+      const zoneName = plan?.zone?.name ?? tracked?.[0]?.zoneName ?? null;
       const hosts = standIn?.hosts?.length
         ? standIn.hosts
         : redirect.hosts?.length
@@ -521,8 +526,8 @@ class Action {
           .map((redirect) => redirect.source)
           .filter((source) => {
             const planConn = status.plans[source]?.zone?.connectionId;
-            const trackedConn = status.redirectRules?.[source]?.connectionId;
-            if (!planConn || removedIds.includes(planConn) || (trackedConn && removedIds.includes(trackedConn))) return true;
+            const trackedConns = (status.redirectRules?.[source] ?? []).map((tracked) => tracked.connectionId);
+            if (!planConn || removedIds.includes(planConn) || trackedConns.some((id) => removedIds.includes(id))) return true;
             return clearedZones.some((zone) => source === zone || source.endsWith(`.${zone}`));
           })
         : [];
@@ -604,7 +609,7 @@ class Action {
       if (standIns[redirect.source]) return !before?.zone && Boolean(run.planRedirect(redirect).zone);
       const wasCloudflare = before?.zone
         ? true
-        : (!before || before.problems.length > 0) && Boolean(status.redirectRules?.[redirect.source]);
+        : (!before || before.problems.length > 0) && Boolean(status.redirectRules?.[redirect.source]?.length);
       return wasCloudflare && run.resolvesLocally(redirect);
     }).map((redirect) => redirect.source);
     if (!moving.length) return;
@@ -721,9 +726,9 @@ class Action {
   private async deletionPlan(source: string): Promise<{ run: RedirectsRun; removal: Removal; replacedBy: string | null; plans: RedirectPlan[]; digest: string }> {
     const policy = this.files.policy();
     const redirect = policy.redirects.find((candidate) => candidate.source === source)!;
-    const tracked = this.files.status().redirectRules?.[source];
+    const tracked = this.files.status().redirectRules?.[source] ?? [];
     const run = this.run(policy);
-    if (readCloudflareConnections(this.files.cfPaths).length || tracked) {
+    if (readCloudflareConnections(this.files.cfPaths).length || tracked.length) {
       await run.discover();
       await run.loadRedirectDeletion(source, tracked);
     }
@@ -758,10 +763,10 @@ class Action {
   async deleteRedirect(source: string, notice?: string): Promise<RedirectsReply> {
     const policy = this.files.policy();
     if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
-    const tracked = this.files.status().redirectRules?.[source];
+    const tracked = this.files.status().redirectRules?.[source] ?? [];
     const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
     const { run, removal, replacedBy, plans, digest } = await this.deletionPlan(source);
-    if (!hasCf && !tracked) {
+    if (!hasCf && !tracked.length) {
       await run.remove(source, removal, replacedBy ? `Replaced by the site ${replacedBy}` : "The redirect domain was deleted");
       this.forget([source]);
       return this.reply({ notice: removal.standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed.` });

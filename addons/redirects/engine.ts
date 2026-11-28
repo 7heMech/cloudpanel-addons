@@ -88,8 +88,8 @@ export interface RedirectsRunContext {
   standIns?: StandIns;
   /** Cached token access from the last check, for runs that do not re-read policies. */
   storedTokens?: Record<string, TokenAccess | undefined>;
-  /** Where each redirect's rule was last seen. */
-  tracked?: Record<string, TrackedRedirectRule>;
+  /** Every zone where each redirect's rule was seen and not yet read gone. */
+  tracked?: Record<string, TrackedRedirectRule[]>;
 }
 
 interface ZoneRef {
@@ -362,17 +362,18 @@ export class RedirectsRun {
       const redirect = this.redirects.get(domain);
       if (!redirect) continue;
       if (this.replacingSite(redirect)) {
-        for (const ref of this.deletionRefs(domain, this.context.tracked?.[domain])) refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
+        for (const ref of this.deletionRefs(domain, this.context.tracked?.[domain] ?? [])) refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
         continue;
       }
       const resolved = this.resolve(redirect);
       if (resolved.kind !== "zone") continue;
       refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
-      const tracked = this.context.tracked?.[domain];
-      if (!tracked || tracked.zoneId === resolved.ref.zone.id) continue;
-      const elsewhere = this.zoneRefs.filter((ref) => ref.zone.id === tracked.zoneId && !INACTIVE_ZONES.has(ref.zone.status));
-      const ref = elsewhere.find((candidate) => candidate.connectionId === tracked.connectionId) ?? this.preferred(elsewhere);
-      if (ref) refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
+      for (const tracked of this.context.tracked?.[domain] ?? []) {
+        if (tracked.zoneId === resolved.ref.zone.id) continue;
+        const elsewhere = this.zoneRefs.filter((ref) => ref.zone.id === tracked.zoneId && !INACTIVE_ZONES.has(ref.zone.status));
+        const ref = elsewhere.find((candidate) => candidate.connectionId === tracked.connectionId) ?? this.preferred(elsewhere);
+        if (ref) refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
+      }
     }
     await Promise.all([...refs.values()].map((ref) => this.loadZone(ref)));
   }
@@ -385,16 +386,17 @@ export class RedirectsRun {
 
   /**
    * Where to track `source`'s rule after this run: the selected zone once a plan
-   * found the rule there, but never moved off an earlier zone until a read of
-   * that zone shows its rule is gone.
+   * found the rule there, plus every earlier zone until a read of that zone
+   * shows its rule is gone.
    */
-  trackedRule(source: string): TrackedRedirectRule | undefined {
+  trackedRules(source: string): TrackedRedirectRule[] {
     const redirect = this.redirects.get(source);
-    const previous = this.context.tracked?.[source];
+    const previous = this.context.tracked?.[source] ?? [];
     const seen = this.seen.get(source);
     const at = seen && { connectionId: seen.connectionId, zoneId: seen.zone.id, zoneName: seen.zone.name };
-    if (!previous || !redirect || previous.zoneId === at?.zoneId) return at ?? previous;
-    return this.ruleGone(redirect, previous.zoneId, previous.zoneName) ? at : previous;
+    const kept = previous.filter((tracked) => tracked.zoneId !== at?.zoneId
+      && (!redirect || !this.ruleGone(redirect, tracked.zoneId, tracked.zoneName)));
+    return at ? [at, ...kept] : kept;
   }
 
   private zoneView(ref: ZoneRef): ZoneView {
@@ -772,23 +774,23 @@ export class RedirectsRun {
   // -------------------------------------------------------------------------
 
   /** Active Cloudflare zones that could hold a Single Redirect rule for `source`, deduplicated by physical zone ID. */
-  private cloudflareRedirectZones(source: string, tracked?: TrackedRedirectRule): ZoneRef[] {
+  private cloudflareRedirectZones(source: string, tracked: TrackedRedirectRule[]): ZoneRef[] {
     const matching = this.zoneRefs.filter((ref) =>
       !INACTIVE_ZONES.has(ref.zone.status) && (source === ref.zone.name || source.endsWith(`.${ref.zone.name}`)));
     if (!matching.length) return [];
     const longest = Math.max(...matching.map((ref) => ref.zone.name.length));
-    const candidates = matching.filter((ref) => ref.zone.name.length === longest || (tracked && ref.zone.id === tracked.zoneId));
+    const candidates = matching.filter((ref) => ref.zone.name.length === longest || tracked.some((entry) => entry.zoneId === ref.zone.id));
     const byZoneId = new Map<string, ZoneRef[]>();
     for (const ref of candidates) {
       byZoneId.set(ref.zone.id, [...byZoneId.get(ref.zone.id) ?? [], ref]);
     }
     return [...byZoneId.values()].map((group) =>
-      (tracked ? group.find((ref) => ref.connectionId === tracked.connectionId) : undefined)
+      group.find((ref) => tracked.some((entry) => entry.zoneId === ref.zone.id && entry.connectionId === ref.connectionId))
       ?? this.preferred(group)!);
   }
 
-  /** One reference per distinct zone that could hold `source`'s rule: the selected zone, the longest matches, and the tracked zone. */
-  private deletionRefs(source: string, tracked?: TrackedRedirectRule): ZoneRef[] {
+  /** One reference per distinct zone that could hold `source`'s rule: the selected zone, the longest matches, and the tracked zones. */
+  private deletionRefs(source: string, tracked: TrackedRedirectRule[]): ZoneRef[] {
     const refs = new Map<string, ZoneRef>();
     const redirect = this.redirects.get(source);
     const resolved = redirect && this.resolve(redirect);
@@ -800,19 +802,19 @@ export class RedirectsRun {
   }
 
   /** Reads every Cloudflare zone needed to check whether deleting or replacing `source` must also remove a Single Redirect rule. */
-  async loadRedirectDeletion(source: string, tracked?: TrackedRedirectRule): Promise<void> {
+  async loadRedirectDeletion(source: string, tracked: TrackedRedirectRule[]): Promise<void> {
     await Promise.all(this.deletionRefs(source, tracked).map((ref) => this.loadZone(ref)));
   }
 
   /**
    * The Cloudflare Single Redirect rule deleting or replacing `source` would remove;
    * null when every zone that could hold one was read and none does. Inspects the
-   * selected zone, the longest matching zones and any tracked zone, even when
+   * selected zone, the longest matching zones and the tracked zones, even when
    * `mode === "local"` or a stand-in serves it.
    */
   redirectRuleOf(
     source: string,
-    tracked?: TrackedRedirectRule,
+    tracked: TrackedRedirectRule[],
   ): FoundRule | { problem: string } | null {
     const redirect = this.redirects.get(source);
     if (!redirect) return null;
@@ -823,9 +825,10 @@ export class RedirectsRun {
     if (resolved.kind === "choose") {
       return { problem: `${resolved.name} is reachable through more than one connection; choose which one manages it` };
     }
-    if (tracked && !this.zoneRefs.some((ref) => ref.zone.id === tracked.zoneId)) {
+    const unreachable = tracked.find((entry) => !this.zoneRefs.some((ref) => ref.zone.id === entry.zoneId));
+    if (unreachable) {
       return {
-        problem: `${tracked.zoneName}, where the Cloudflare rule for ${source} was last seen, is not reachable through any Cloudflare connection; connect a token that reaches it so Redirects can check for the rule`,
+        problem: `${unreachable.zoneName}, where the Cloudflare rule for ${source} was last seen, is not reachable through any Cloudflare connection; connect a token that reaches it so Redirects can check for the rule`,
       };
     }
 
@@ -849,7 +852,7 @@ export class RedirectsRun {
    * A rule that cannot be read leaves a problem and nothing to delete.
    */
   removal(source: string, placeholders: boolean): Removal {
-    const tracked = this.context.tracked?.[source];
+    const tracked = this.context.tracked?.[source] ?? [];
     const standIn = Boolean(this.context.standIns?.current[source]);
     const removal: Removal = { rule: null, records: [], standIn, changes: [], problems: [] };
     const found = this.redirectRuleOf(source, tracked);

@@ -145,11 +145,11 @@ rule was last seen, it shows a review listing the rule and any stand-in site it
 deletes, and applies it only on confirmation of that plan's digest, which covers
 the rule itself. With neither, the page confirms and the stand-in site is
 deleted at once. The check covers connected Cloudflare zones even when the
-redirect is currently `mode: "local"` or served by a stand-in. It reads the selected zone, the longest matching zones, and the zone
-where it last saw the redirect's rule (`status.redirectRules`). A check moves
-that tracked zone only after it finds the rule in the newly selected zone and
-a read of the tracked zone shows no rule left there. If any
-Cloudflare connection fails discovery, no connection lists the tracked zone,
+redirect is currently `mode: "local"` or served by a stand-in. It reads the selected zone, the longest matching zones, and every zone
+where it has seen the redirect's rule (`status.redirectRules`). A check adds
+the selected zone once it finds the rule there, and drops a tracked zone only
+when a read of that zone shows no rule left. If any
+Cloudflare connection fails discovery, no connection lists a tracked zone,
 a zone cannot be read, a zone has conflicting rules, or more than one zone holds
 a rule for the redirect, deletion blocks rather than orphaning a Cloudflare
 rule. On confirmation, Redirects deletes the Cloudflare rule first, then any
@@ -174,7 +174,7 @@ before DNS's hook plans the new site's records. `sync-sites` first checks,
 without the lock or any Cloudflare call, whether a site uses a redirect's source,
 its `www`, or a custom stand-in host, and returns at once when none does. The
 rule is deleted first, then placeholders, then the stand-in. The redirect is then
-dropped from the policy, its plan, tracked rule and hold, and each step is
+dropped from the policy, its plan, tracked zones and hold, and each step is
 logged "Replaced by the site <domain>".
 
 In Ask first mode the removal waits as pending changes on the redirect, shown as

@@ -757,12 +757,12 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     await env.confirmed(await env.act("save-redirect", found("go.sub.example.com", "https://example.net")));
     await env.act("set-automatic", { automatic: false });
     const tracked = () => JSON.parse(readFileSync(join(env.paths.stateDir, "status.json"), "utf8")).redirectRules?.["go.sub.example.com"];
-    expect(tracked()?.zoneName).toBe("example.com");
+    expect(tracked()?.map((zone: { zoneName: string }) => zone.zoneName)).toEqual(["example.com"]);
 
     env.cf.zone("sub.example.com", env.account);
     const checked = await env.act("check");
     expect(checked.redirects[0]!.plan!.zone!.name).toBe("sub.example.com");
-    expect(tracked()?.zoneName).toBe("example.com");
+    expect(tracked()?.map((zone: { zoneName: string }) => zone.zoneName)).toEqual(["example.com"]);
 
     const replace = await env.act("delete-redirect", { source: "go.sub.example.com" });
     expect(replace.review!.blocked).toBe(false);
@@ -773,6 +773,49 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     env.redirectRules("example.com").pop();
     await env.act("check");
     expect(tracked()).toBeUndefined();
+  });
+
+  test("keeps tracking an intermediate zone's rule when the selected zone moves on twice", async () => {
+    const env = setup();
+    env.cf.zone("example.com", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("go.sub.example.com", "https://example.net")));
+    const tracked = () => (JSON.parse(readFileSync(join(env.paths.stateDir, "status.json"), "utf8"))
+      .redirectRules?.["go.sub.example.com"] ?? []).map((zone: { zoneName: string }) => zone.zoneName);
+
+    env.cf.zone("sub.example.com", env.account);
+    await env.act("check");
+    await env.act("check");
+    expect(env.redirectRules("sub.example.com")).toHaveLength(1);
+    expect(tracked()).toEqual(["sub.example.com", "example.com"]);
+
+    env.redirectRules("example.com").pop();
+    env.cf.zone("go.sub.example.com", env.account);
+    await env.act("check");
+    await env.act("check");
+    expect(env.redirectRules("go.sub.example.com")).toHaveLength(1);
+    expect(tracked()).toEqual(["go.sub.example.com", "sub.example.com"]);
+
+    const both = await env.act("delete-redirect", { source: "go.sub.example.com" });
+    expect(both.review!.blocked).toBe(true);
+    expect(both.review!.sites[0]!.problems.join(" ")).toContain("exist in more than one zone (go.sub.example.com, sub.example.com)");
+  });
+
+  test("still reads a single tracked zone saved before zones were listed", async () => {
+    const env = setup();
+    env.cf.zone("example.com", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("go.example.com", "https://example.net")));
+    const statusFile = join(env.paths.stateDir, "status.json");
+    const status = JSON.parse(readFileSync(statusFile, "utf8"));
+    status.redirectRules["go.example.com"] = { connectionId: "cf-gone", zoneId: "9".repeat(32), zoneName: "ghost.example.com" };
+    writeFileSync(statusFile, JSON.stringify(status), { mode: 0o600 });
+
+    const blocked = await env.act("delete-redirect", { source: "go.example.com" });
+    expect(blocked.review!.blocked).toBe(true);
+    expect(blocked.review!.sites[0]!.problems.join(" ")).toContain("ghost.example.com, where the Cloudflare rule for go.example.com was last seen, is not reachable");
   });
 
   test("holds a stand-in that gains a zone even when a refresh records the zoned plan first", async () => {
