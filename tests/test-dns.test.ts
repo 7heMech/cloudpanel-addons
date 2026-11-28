@@ -1233,6 +1233,14 @@ describe("automatic SSL", () => {
     env.sites.push(site(24, "unassigned.example.com", { createdAt: env.clock.now, selfSigned: true }));
     await env.act("sync-sites");
     expect((await env.act("list")).sites.find((s) => s.domain === "unassigned.example.com")!.ssl).toBeNull();
+
+    // 6. A site with only a Mail role has no HTTP records for a certificate, so it is not queued either.
+    await env.act("set-default", { mailProfileId: "dmarc" });
+    env.sites.push(site(25, "mail-only.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("sync-sites");
+    const sslFile = join(env.dir, "state", "ssl.json");
+    const queued = (statSync(sslFile, { throwIfNoEntry: false }) ? JSON.parse(readFileSync(sslFile, "utf8")) : {}) as Record<string, unknown>;
+    expect(Object.keys(queued)).not.toContain("mail-only.example.com");
   });
 });
 

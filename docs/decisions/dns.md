@@ -646,8 +646,8 @@ seconds and before SMTP Relay, which waits at most fifteen seconds for it. When
 DNS is Automatic and Panel Tweaks is enabled with `autoSsl` turned on (checked
 from Panel Tweaks' enable flag and its root-owned `tweaks.json`, with missing or
 untrusted files treated as off), `sync-sites` and `check` also enqueue newly
-adopted self-signed sites created within `NEW_SITE_WINDOW` (fifteen minutes)
-into `ssl.json` via `requestSsl`. Sites created through `clpctl`, or whose
+adopted self-signed sites with an HTTP role created within `NEW_SITE_WINDOW`
+(fifteen minutes) into `ssl.json` via `requestSsl`. Sites created through `clpctl`, or whose
 browser completion tab closed early, still receive automatic Let's Encrypt
 retries once DNS is ready.
 

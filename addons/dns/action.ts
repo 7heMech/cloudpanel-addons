@@ -978,7 +978,7 @@ class Action {
   private enqueueNewSiteSsl(before: Policy, after: Policy): void {
     if (!after.automatic || !panelTweaksAutoSsl(this.paths)) return;
     const known = new Set(before.knownSiteIds);
-    const candidates = this.sites().filter((site) => !known.has(site.id) && Boolean(after.assignments[site.domain]));
+    const candidates = this.sites().filter((site) => !known.has(site.id) && Boolean(after.assignments[site.domain]?.http));
     if (!candidates.length) return;
     const requests = this.files.ssl();
     let changed = false;
