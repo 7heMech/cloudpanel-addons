@@ -493,6 +493,30 @@ describe("Firewall approve-once Cloudflare edge defaults", () => {
     expect(other.error).toContain("WAF skip rule changed in Cloudflare");
   });
 
+  test("confirming an approval while Cloudflare cannot be read neither renews the review nor approves", async () => {
+    const env = makeEnv();
+    const zone = env.cf.zone("down.example", env.agency);
+    await env.connect();
+    const review = await saveCloudflareEdge({ approve: true, defaults: DEFAULT_EDGE_DEFAULTS }, env.options);
+    expect(review.review!.zones.length).toBe(1);
+
+    let down = true;
+    const wrapped: EdgeOptions = {
+      ...env.options,
+      fetch: async (address, init) => down
+        ? new Response(JSON.stringify({ success: false, errors: [{ code: 500, message: "Upstream outage" }] }), { status: 503 })
+        : env.cf.fetch(address, init),
+    };
+    await expect(confirmCloudflareEdge(review.review!.token, wrapped)).rejects.toThrow("Cloudflare could not be read");
+    await expect(confirmCloudflareEdge(review.review!.token, wrapped)).rejects.toThrow("Cloudflare could not be read");
+    expect(readEdgeConfig(env.options).approved).toBe(false);
+
+    down = false;
+    await confirmCloudflareEdge(review.review!.token, wrapped);
+    expect(readEdgeConfig(env.options).approved).toBe(true);
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBe("strict");
+  });
+
   test("disambiguates duplicate zone names across two Cloudflare accounts", async () => {
     const env = makeEnv();
     const account2 = env.cf.account("Secondary");

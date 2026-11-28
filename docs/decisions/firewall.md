@@ -304,7 +304,8 @@ read only local files and make zero Cloudflare API calls.
    and the live state of each rule it updates or deletes. Confirming re-reads
    live Cloudflare state, verifies both config hash and plan digest (showing a
    fresh review if Cloudflare changed in between, including a rule replaced
-   with an identical-looking one),
+   with an identical-looking one; when no connection can be read, approving
+   or updating defaults is refused, at preparation and at confirmation alike),
    applies changes to non-blocked zones, records `approved: true` with
    `approvedDigest`, and logs each write.
 3. **Automatic inheritance for new zones.** While `approved` is true and

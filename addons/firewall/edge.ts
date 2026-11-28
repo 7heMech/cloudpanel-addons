@@ -1230,6 +1230,9 @@ export async function confirmCloudflareEdge(token: string, options: EdgeOptions 
 
     const status = readEdgeStatus(paths);
     const discovery = await discoverZones(paths, config, options, pending.nextDefaults);
+    if (pending.kind !== "zone" && discovery.connectionErrors.length > 0 && discovery.zones.length === 0) {
+      failAction(`Cloudflare could not be read: ${discovery.connectionErrors.join("; ")}`);
+    }
     const scopedZones = pending.kind === "zone"
       ? discovery.zones.filter((entry) => entry.zoneKey === pending.zoneKey)
       : discovery.zones;
