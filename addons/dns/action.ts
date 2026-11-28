@@ -340,14 +340,8 @@ class Files {
       ? clean.profiles.map((profile) => legacyZones.has(profile.id) ? { ...profile, zone: legacyZones.get(profile.id) } : profile)
       : clean.profiles;
     // Redirects not yet moved to the Redirects addon stay for its migration, which reads them from here.
-    // Their Mail roles are in `clean` now, so a later read never restores one an administrator removed.
     const raw = onDisk && typeof onDisk === "object" ? (onDisk as { redirects?: unknown }).redirects : undefined;
-    const withoutMail = (entry: unknown) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
-      const { mailProfileId: _imported, ...rest } = entry as Record<string, unknown>;
-      return rest;
-    };
-    const redirects = Array.isArray(raw) && raw.length ? { redirects: raw.map(withoutMail) } : {};
+    const redirects = Array.isArray(raw) && raw.length ? { redirects: raw } : {};
     writeState(this.path("policy"), { ...clean, profiles, connections: legacy, ...redirects }, this.paths.rootUid);
   }
 

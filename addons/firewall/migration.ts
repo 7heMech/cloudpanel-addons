@@ -373,9 +373,8 @@ export function migrateCloudflareEdgeFromDns(
   if (Array.isArray(parsed.redirects)) {
     for (const entry of parsed.redirects) {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-      const { profileId, mailProfileId } = entry as { profileId?: unknown; mailProfileId?: unknown };
+      const { profileId } = entry as { profileId?: unknown };
       if (typeof profileId === "string" && profileId) activeIds.add(profileId);
-      if (typeof mailProfileId === "string" && mailProfileId) activeIds.add(mailProfileId);
     }
   }
   for (const key of ["defaultProfileId", "defaultHttpProfileId", "defaultMailProfileId"] as const) {

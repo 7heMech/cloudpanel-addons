@@ -1101,15 +1101,16 @@ describe("Upgrade migration from DNS profile zone options", () => {
     }), { mode: 0o600 });
 
     // v2 policy where an active site combines a legacy-zone HTTP profile with a new zone-less Mail profile,
-    // and an active redirect references a split Mail profile carrying legacy `ssl: "full"`. DNS's v2 save writes `zone`
-    // only from v1 profiles in use, so the unused `web` profile has none.
+    // and the redirect's domain has a split Mail profile carrying legacy `ssl: "full"`; the v1 redirect DNS's save
+    // kept for Redirects still names its v1 profile. DNS's v2 save writes `zone` only from v1 profiles in use,
+    // so the unused `web` profile has none.
     writeFileSync(paths.dnsPolicy, JSON.stringify({
       version: 2,
       automatic: true,
       defaultHttpProfileId: null,
       defaultMailProfileId: null,
-      assignments: { "site.example.com": { http: "custom-http", mail: "google" } },
-      redirects: [{ source: "old.example.org", target: "https://site.example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "redirect-mail" }],
+      assignments: { "site.example.com": { http: "custom-http", mail: "google" }, "old.example.org": { http: null, mail: "redirect-mail" } },
+      redirects: [{ source: "old.example.org", target: "https://site.example.com", status: 301, keepPath: true, keepQuery: true, profileId: "redirect" }],
       profiles: [
         { id: "web", name: "Web", role: "http", records: [], mailcow: false },
         { id: "custom-http", name: "Custom HTTP", role: "http", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } },

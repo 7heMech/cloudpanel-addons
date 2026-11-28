@@ -831,18 +831,6 @@ export function parsePolicy(value: unknown): Policy {
       const parsed = parseAssignment(entry, httpIds, mailIds);
       if (parsed) assignments[hostname(domain, "an assigned site")] = parsed;
     }
-    // Redirects not yet moved to Redirects keep their Mail role here, as DNS-only domains.
-    const domains = new Set(base.domains);
-    for (const entry of Array.isArray(raw.redirects) ? raw.redirects : []) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-      const item = entry as Record<string, unknown>;
-      const source = safeHostname(item.source);
-      const mail = typeof item.mailProfileId === "string" && mailIds.has(item.mailProfileId) ? item.mailProfileId : null;
-      if (!source || !mail) continue;
-      if (!assignments[source]) assignments[source] = { http: null, mail };
-      if (assignments[source]!.mail) domains.add(source);
-    }
-    if (domains.size > MAX_DOMAINS) failAction(`the redirects' Mail roles do not fit in ${MAX_DOMAINS} DNS-only domains`);
     const heldRaw = Array.isArray(raw.held) ? raw.held : [];
     const held = [...new Set(heldRaw.filter((domain): domain is string => typeof domain === "string" && Boolean(assignments[domain])))];
     const defaultHttp = typeof raw.defaultHttpProfileId === "string" && httpIds.has(raw.defaultHttpProfileId)
@@ -858,7 +846,7 @@ export function parsePolicy(value: unknown): Policy {
       defaultHttpProfileId: defaultHttp,
       defaultMailProfileId: defaultMail,
       assignments,
-      domains: [...domains],
+      domains: base.domains,
       held,
       knownSiteIds: base.knownSiteIds,
       connections: base.connections,
