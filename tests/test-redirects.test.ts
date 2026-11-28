@@ -1297,7 +1297,7 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
     expect(() => migrateRedirectsFromDns(enableRedirects, options)).toThrow();
   });
 
-  test("DNS list excludes stand-in sites tracked in Redirects' standins.json", async () => {
+  test("DNS list excludes stand-in sites whose redirect Redirects serves at Cloudflare's edge", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dns-standin-exclude-"));
     dirs.push(dir);
     writeFileSync(join(dir, "dns.conf"), "enabled");
@@ -1306,12 +1306,17 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
     writeFileSync(standInsFile, JSON.stringify({
       "old.example": { siteUser: "old-1a2b3c4d", siteId: 99, createdAt: 0 },
     }), { mode: 0o600 });
+    const redirectsStatusFile = join(dir, "redirects", "status.json");
+    writeFileSync(redirectsStatusFile, JSON.stringify({
+      checkedAt: null, plans: {}, redirectRules: { "old.example": { connectionId: "cf-1", zoneId: "z", zoneName: "old.example" } },
+    }), { mode: 0o600 });
 
     const reply = await executeDnsAction(["list"], {
       paths: {
         configFile: join(dir, "dns.conf"),
         stateDir: join(dir, "dns"),
         standInsFile,
+        redirectsStatusFile,
         smtpConfig: join(dir, "smtp.json"),
         lockFile: join(dir, "dns.lock"),
         panelDb: join(dir, "db.sq3"),
@@ -1321,7 +1326,7 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
       processUid: 0,
       sites: () => [
         { id: 1, domain: "real.example", type: "php", createdAt: 0, selfSigned: false, cloudflareOnly: false },
-        { id: 99, domain: "old.example", type: "static", createdAt: 0, selfSigned: true, cloudflareOnly: false },
+        { id: 99, domain: "old.example", type: "static", user: "old-1a2b3c4d", createdAt: 0, selfSigned: true, cloudflareOnly: false },
       ],
     }) as DnsReply;
     expect(reply.sites.map((site) => site.domain)).toEqual(["real.example"]);

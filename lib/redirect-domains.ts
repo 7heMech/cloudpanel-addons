@@ -1,8 +1,8 @@
 /**
  * Redirects' domains as DNS needs them, read from Redirects' saved state so DNS
- * never imports the addon: each redirect's source, where it is served, and the
- * hosts it answers for. DNS gives those domains their Mail role, and points a
- * stand-in's hosts at this server; Redirects owns the redirect itself.
+ * never imports the addon: each redirect's source and the hosts it answers
+ * for, to warn on DNS rows, and which redirects Redirects serves at
+ * Cloudflare's edge, whose stand-in sites DNS leaves out.
  */
 import { getDomain } from "tldts";
 import { dnsName } from "./dns-name";
@@ -11,6 +11,7 @@ import { readState } from "./root-state";
 import { LEGACY_DNS_STAND_INS_FILE, STAND_INS_FILE } from "./stand-ins";
 
 export const REDIRECTS_POLICY_FILE = `${addonStateDir("redirects")}/policy.json`;
+export const REDIRECTS_STATUS_FILE = `${addonStateDir("redirects")}/status.json`;
 
 export interface RedirectDomain {
   source: string;
@@ -26,6 +27,7 @@ export interface RedirectDomain {
 export interface RedirectDomainPaths {
   policyFile?: string;
   standInsFile?: string;
+  statusFile?: string;
   rootUid: number;
 }
 
@@ -60,10 +62,14 @@ function readObject(path: string, rootUid: number): Record<string, unknown> {
   }
 }
 
+/** Every host a redirect answers for. */
+export function coveredHosts(redirect: RedirectDomain): string[] {
+  return redirect.hosts ?? standInHosts(redirect.source);
+}
+
 /**
- * Read whether or not Redirects is enabled, so turning it off for a while does
- * not drop a redirect domain's Mail role. Untrusted or malformed state reads as
- * no redirects.
+ * Read whether or not Redirects is enabled. Untrusted or malformed state reads
+ * as no redirects.
  */
 export function readRedirectDomains(paths: RedirectDomainPaths): RedirectDomain[] {
   const policy = readObject(paths.policyFile ?? REDIRECTS_POLICY_FILE, paths.rootUid);
@@ -90,4 +96,32 @@ export function readRedirectDomains(paths: RedirectDomainPaths): RedirectDomain[
     });
   }
   return domains;
+}
+
+/**
+ * The sources whose redirect Redirects serves at Cloudflare's edge: its last
+ * plan found the source's Cloudflare zone, or it still tracks a rule there.
+ * Null when the status is there but cannot be trusted or read.
+ */
+export function readEdgeSources(paths: RedirectDomainPaths): Set<string> | null {
+  let raw: unknown;
+  try {
+    raw = readState<unknown>(paths.statusFile ?? REDIRECTS_STATUS_FILE, paths.rootUid, () => ({}));
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const status = raw as Record<string, unknown>;
+  const edge = new Set<string>();
+  for (const key of ["plans", "redirectRules"] as const) {
+    const entries = status[key];
+    if (entries === undefined) continue;
+    if (!entries || typeof entries !== "object" || Array.isArray(entries)) return null;
+    for (const [domain, entry] of Object.entries(entries as Record<string, unknown>)) {
+      const source = host(domain);
+      if (!source || !entry || typeof entry !== "object") continue;
+      if (key === "redirectRules" || (entry as { zone?: unknown }).zone) edge.add(source);
+    }
+  }
+  return edge;
 }

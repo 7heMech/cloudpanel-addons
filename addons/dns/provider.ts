@@ -17,8 +17,6 @@ export const PROVIDER_LABELS: Record<ProviderKind, string> = {
 export interface ProviderCapabilities {
   /** Whether records can be proxied through the provider's edge. */
   proxy: boolean;
-  /** Whether redirect domains can run as edge redirect rules without a local stand-in site. */
-  edgeRedirects: boolean;
   /** Whether this connection can create missing zones automatically. */
   createZone: boolean;
   /** Whether `ttl: 1` means provider-managed Auto TTL; false resolves 1 to `defaultTtl`. */

@@ -15,7 +15,7 @@ export const LEGACY_DNS_STAND_INS_FILE = `${addonStateDir("dns")}/standins.json`
 const CREATING_MS = 15 * 60_000;
 
 /** How Redirects' record of a stand-in names its site: the user it chose, and CloudPanel's id once the site exists. */
-interface StandInMark {
+export interface StandInMark {
   siteUser?: string;
   siteId?: number;
   createdAt?: number;
@@ -36,21 +36,30 @@ export function ownsStandInSite(mark: StandInMark | undefined, site: { id: numbe
   return mark?.siteId !== undefined && isStandInSite(mark, site);
 }
 
-function readMarks(file: string, rootUid: number): Record<string, StandInMark> {
+function readMarks(file: string, rootUid: number): Record<string, StandInMark> | null {
   try {
     if (!existsSync(file)) return {};
     const stat = lstatSync(file);
-    if (!stat.isFile() || stat.uid !== rootUid || (stat.mode & 0o022) !== 0) return {};
-    return JSON.parse(readFileSync(file, "utf8")) as Record<string, StandInMark>;
+    if (!stat.isFile() || stat.uid !== rootUid || (stat.mode & 0o022) !== 0) return null;
+    const marks = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    return marks && typeof marks === "object" && !Array.isArray(marks) ? marks as Record<string, StandInMark> : null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+/** Redirects' record of its stand-ins by domain; null when a file is there but cannot be trusted or read. */
+export function readStandInMarks(file?: string, rootUid = 0): Record<string, StandInMark> | null {
+  if (file !== undefined) return readMarks(file, rootUid);
+  const legacy = readMarks(LEGACY_DNS_STAND_INS_FILE, rootUid);
+  const current = readMarks(STAND_INS_FILE, rootUid);
+  return legacy && current ? { ...legacy, ...current } : null;
 }
 
 export function standInDomains(file?: string, rootUid = 0, panelDb: string | Database = PANEL_DB): Set<string> {
   const marks = file !== undefined
-    ? readMarks(file, rootUid)
-    : { ...readMarks(LEGACY_DNS_STAND_INS_FILE, rootUid), ...readMarks(STAND_INS_FILE, rootUid) };
+    ? readMarks(file, rootUid) ?? {}
+    : { ...readMarks(LEGACY_DNS_STAND_INS_FILE, rootUid) ?? {}, ...readMarks(STAND_INS_FILE, rootUid) ?? {} };
   if (Object.keys(marks).length === 0) return new Set();
   try {
     const db = typeof panelDb === "string" ? new Database(panelDb, { readonly: true }) : panelDb;

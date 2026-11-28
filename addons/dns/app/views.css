@@ -51,6 +51,8 @@
 .dns-site-card .bulk-assign > select { min-width:140px; padding:7px 30px 7px 11px; background-position:right 9px center; font-size:14px; }
 .dns-role-select.dns-role-default { color:var(--muted); }
 .dns-mailcow-warn { display:inline-block; margin-top:6px; }
+.dns-redirected { display:table; margin-top:6px; text-decoration:none; }
+.dns-sites-title { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; }
 .dns-status { min-width:168px; }
 .dns-mailcow-connect h2 { margin:0 0 8px; }
 .dns-mailcow-connect p.hint { margin:0 0 20px; max-width:68ch; }

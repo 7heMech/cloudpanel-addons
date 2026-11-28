@@ -399,7 +399,10 @@ function dnsShowSite(domain) {
   if (site.mailcowMissing && (!plan || !plan.problems.length)) {
     html += '<div class="alert">Mailcow is not connected. Reconnect Mailcow on the Mailcow tab or change this domain\'s Mail role.</div>';
   }
-  if (!plan) html += '<p class="hint">Not checked yet. Check now reads it from your DNS provider.</p>';
+  if (!plan) {
+    html += httpProfile || mailProfile ? '<p class="hint">Not checked yet. Check now reads it from your DNS provider.</p>'
+      : '<p class="hint">No HTTP or Mail role yet. Choose one in its row.</p>';
+  }
   else {
     html += dnsProblems(plan.problems);
     if (plan.zone && plan.zone.status !== 'active' && plan.zone.nameServers.length) {
@@ -423,19 +426,15 @@ function dnsShowSite(domain) {
       html += '<h3 class="dns-section">' + (dnsState.automatic ? 'To change' : 'Differences, not changed until DNS is Automatic') + '</h3>'
         + (plan.wildcardBlocked ? '<p class="hint dns-wildcard-note">' + dnsEsc(plan.wildcardBlocked) + '.</p>' : '')
         + dnsChanges(plan.changes);
-      // A redirect has no Apply: the next check makes its changes.
-      if (dnsState.automatic && site.redirect && !plan.held && plan.changes.some(function (change) { return change.action !== 'note'; })) {
-        html += '<p class="hint">The next check makes these, within 15 minutes.</p>';
-      }
     }
   }
 
-  html += '<h3 class="dns-section">' + (site.redirect ? 'Redirect' : 'Site') + '</h3><dl class="dns-facts">';
-  if (site.redirect) {
-    html += '<dt>Redirects to</dt><dd class="dns-change-detail">' + dnsEsc(site.redirect.target) + '</dd>' +
-      '<dt>Served by</dt><dd>' + (site.redirect.standIn ? 'A stand-in site on this server; DNS points its hosts here' : 'Redirects, through Cloudflare') + '</dd>';
+  if (site.redirectedBy) {
+    html += '<div class="notice">' + dnsEsc(site.redirectedBy.source) + ' redirects to ' + dnsEsc(site.redirectedBy.target) +
+      ' in <a href="' + DNS_REDIRECTS + '">Redirects</a>. DNS still keeps this domain\'s records to its roles below.</div>';
   }
-  const httpDesc = site.redirect ? 'Redirect, managed in Redirects' : httpProfile ? 'Site · ' + dnsEsc(httpProfile.name) : 'DNS-only (no web records)';
+  html += '<h3 class="dns-section">' + (site.type === 'domain' ? 'Domain' : 'Site') + '</h3><dl class="dns-facts">';
+  const httpDesc = httpProfile ? 'Site · ' + dnsEsc(httpProfile.name) : 'DNS-only (no web records)';
   const mailDesc = mailProfile ? dnsEsc(mailProfile.name) + (site.mailcowMissing ? ' <span class="badge tone-warn">Mailcow unlinked</span>' : '') : 'None';
   html += '<dt>HTTP role</dt><dd>' + httpDesc + '</dd>' +
     '<dt>Mail role</dt><dd>' + mailDesc + '</dd>' +
@@ -452,11 +451,10 @@ function dnsShowSite(domain) {
   if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';
   html += '</dl>';
   CLP_ROOT.getElementById('dns-site-body').innerHTML = html;
-  CLP_ROOT.getElementById('dns-site-edit').hidden = !site.redirect;
+  CLP_ROOT.getElementById('dns-site-remove').hidden = site.type !== 'domain';
   const pending = plan && !plan.problems.length && plan.changes.some(function (change) { return change.action !== 'note'; });
   const apply = CLP_ROOT.getElementById('dns-site-apply');
-  // A redirect is applied by the next check, or through its review when it is held.
-  apply.hidden = !(dnsState.automatic && pending && (site.redirect ? plan.held : (httpProfile || mailProfile)));
+  apply.hidden = !(dnsState.automatic && pending && (httpProfile || mailProfile));
   apply.textContent = plan && plan.held ? 'Review changes' : 'Apply now';
   dnsOpen('dns-site-dialog');
 }
@@ -465,9 +463,7 @@ async function dnsApplySite() {
   const dialog = CLP_ROOT.getElementById('dns-site-dialog');
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === dnsSiteShown; });
   if (site.plan && site.plan.held) {
-    return dnsPost('/api/assign', site.redirect
-      ? { domains: [site.domain], mailProfileId: site.mailProfileId }
-      : { domains: [site.domain], httpProfileId: site.httpProfileId, mailProfileId: site.mailProfileId }, dialog);
+    return dnsPost('/api/assign', { domains: [site.domain], httpProfileId: site.httpProfileId, mailProfileId: site.mailProfileId }, dialog);
   }
   const reply = await dnsPost('/api/provision', { domain: dnsSiteShown });
   if (!reply) return;
@@ -479,6 +475,39 @@ async function dnsChooseZone() {
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === dnsSiteShown; });
   const choice = CLP_ROOT.getElementById('dns-zone-choice').value.split('/');
   await dnsPost('/api/zone', { zone: site.plan.zoneChoices[0].zone, connectionId: choice[0], zoneId: choice[1] }, CLP_ROOT.getElementById('dns-site-dialog'));
+}
+
+function dnsAddDomain() {
+  const form = CLP_ROOT.getElementById('dns-domain-form');
+  form.reset();
+  const options = function (role, none) {
+    return '<option value="">' + none + '</option>' + dnsState.profiles.filter(function (profile) { return profile.role === role; }).map(function (profile) {
+      return '<option value="' + dnsEsc(profile.id) + '">' + dnsEsc(profile.name) + '</option>';
+    }).join('');
+  };
+  form.elements.namedItem('httpProfileId').innerHTML = options('http', 'DNS-only');
+  form.elements.namedItem('mailProfileId').innerHTML = options('mail', 'None');
+  dnsOpen('dns-domain-dialog');
+  form.elements.namedItem('domain').focus();
+}
+
+function dnsSaveDomain(event) {
+  event.preventDefault();
+  const form = event.target;
+  dnsPost('/api/domains', {
+    domain: form.elements.namedItem('domain').value,
+    httpProfileId: form.elements.namedItem('httpProfileId').value || null,
+    mailProfileId: form.elements.namedItem('mailProfileId').value || null,
+  }, CLP_ROOT.getElementById('dns-domain-dialog'));
+}
+
+async function dnsRemoveDomain(domain) {
+  const accepted = await confirmAction({
+    title: 'Remove ' + domain + '?',
+    text: 'DNS stops managing it. Its records stay in ' + dnsProviderLabel() + ', listed with the records of deleted sites until you remove or keep them.',
+    confirmLabel: 'Remove', danger: true,
+  });
+  if (accepted) dnsPost('/api/domains/remove', { domain: domain }, CLP_ROOT.getElementById('dns-site-dialog'));
 }
 
 function dnsForget(domain) {

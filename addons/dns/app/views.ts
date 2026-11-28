@@ -13,7 +13,7 @@ import { CLOUDFLARE_SCOPE_JS } from "../../../lib/cloudflare/connect-dialog";
 import { PROVIDER_LABELS } from "../provider";
 
 const BASE = mountPath("dns");
-const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLOUDFLARE_SCOPE_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\n${CLIENT_BODY}`;
+const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLOUDFLARE_SCOPE_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\nconst DNS_REDIRECTS = ${JSON.stringify(`${mountPath("redirects")}/`)};\n${CLIENT_BODY}`;
 const HTTP_NONE = "DNS-only";
 const MAIL_NONE = "None";
 
@@ -22,12 +22,10 @@ export function layout(title: string, content: string, notice?: { current: strin
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  wordpress: "WordPress", php: "PHP", static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy", redirect: "Redirect",
+  wordpress: "WordPress", php: "PHP", static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy", domain: "DNS-only domain",
 };
 
-const HTTP_ROLE_LABELS: Record<SiteView["httpRole"], string> = {
-  site: "Site", redirect: "Redirect", "dns-only": "DNS-only",
-};
+const HTTP_ROLE_LABELS: Record<SiteView["httpRole"], string> = { site: "Site", "dns-only": "DNS-only" };
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
@@ -86,14 +84,11 @@ function mailProfileRow(profile: DnsState["profiles"][number], mailcowLinked: bo
 /** What one site's DNS amounts to, in a word and a line. */
 export function siteStatus(site: SiteView, automatic: boolean, singleConnection = false): { label: string; tone: string; hint: string } {
   const plan = site.plan;
-  if (!site.httpProfileId && !site.mailProfileId && !site.redirect) return { label: "—", tone: "muted", hint: "" };
+  if (!site.httpProfileId && !site.mailProfileId) return { label: "—", tone: "muted", hint: "" };
   if (site.mailcowMissing && (!plan || !plan.problems.length)) {
     return { label: "Mailcow unlinked", tone: "warn", hint: "Reconnect Mailcow or change its Mail role" };
   }
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
-  if (site.redirect && !plan.zone && !plan.problems.length && !plan.changes.some((change) => change.action !== "note")) {
-    return { label: "No DNS zone", tone: "muted", hint: site.redirect.standIn ? "Redirects serves it from this server" : "" };
-  }
   const suffix = plan.zone && !singleConnection ? ` · ${plan.zone.connection}` : "";
   const zone = plan.zone ? `${plan.zone.name}${suffix}` : "";
   if (plan.problems.length) return { label: "Needs attention", tone: "bad", hint: plan.problems[0]! };
@@ -127,27 +122,28 @@ function siteRow(site: SiteView, state: DnsState, httpProfiles: Profile[], mailP
   const status = siteStatus(site, state.automatic, single);
   const httpProfile = httpProfiles.find((candidate) => candidate.id === site.httpProfileId);
   const mailProfile = mailProfiles.find((candidate) => candidate.id === site.mailProfileId);
-  const managed = Boolean(site.httpProfileId || site.mailProfileId || site.redirect);
+  const managed = Boolean(site.httpProfileId || site.mailProfileId);
   const show = [
     status.tone === "bad" || site.mailcowMissing ? "attention" : status.tone === "warn" ? "pending" : "",
     filterWord("type", typeLabel(site)),
     managed ? "" : "unmanaged",
-    site.redirect ? "redirect" : "",
+    site.redirectedBy ? "redirected" : "",
   ].filter(Boolean).join(" ");
   const sorts = ` data-sort-attention="${ATTENTION_RANK[status.tone as keyof typeof ATTENTION_RANK] ?? ATTENTION_RANK.muted}" data-sort-http="${esc(httpProfile?.name ?? "")}" data-sort-mail="${esc(mailProfile?.name ?? "")}" data-sort-type="${esc(typeLabel(site))}"`;
   const mailWarn = site.mailcowMissing ? '<span class="badge tone-warn dns-mailcow-warn">Mailcow unlinked</span>' : "";
-  // A redirect domain's HTTP role is Redirects'; DNS keeps only its Mail role.
-  const httpCell = site.redirect
-    ? `<a class="dns-redirect-role" href="${mountPath("redirects")}/" title="Managed in Redirects">${HTTP_ROLE_LABELS.redirect}</a><span class="hint dns-clamp" title="${esc(site.redirect.target)}">→&nbsp;${esc(site.redirect.target.replace(/^https?:\/\//, ""))}</span>`
-    : `<select class="dns-role-select${site.httpProfileId ? "" : " dns-role-default"}" aria-label="HTTP role for ${esc(site.domain)}" onchange="dnsAssignHttp(this)">${profileOptions(httpProfiles, site.httpProfileId, HTTP_NONE)}</select>`;
+  const redirected = site.redirectedBy
+    ? `<a class="badge tone-warn dns-redirected" href="${mountPath("redirects")}/" title="${esc(`${site.redirectedBy.source} redirects to ${site.redirectedBy.target}`)}">Redirected in Redirects</a>`
+    : "";
+  // A DNS-only domain is removed from its Details, so it always has them.
+  const details = managed || site.type === "domain";
   return `<tr data-domain="${esc(site.domain)}" data-http-profile-id="${esc(site.httpProfileId ?? "")}" data-mail-profile-id="${esc(site.mailProfileId ?? "")}" data-show="${show}"${sorts}${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
-    <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
+    <td class="site-cell"><strong>${esc(site.domain)}</strong>${redirected}</td>
     <td class="type-cell">${esc(typeLabel(site))}</td>
-    <td data-label="HTTP" class="dns-role-cell dns-http-cell">${httpCell}</td>
+    <td data-label="HTTP" class="dns-role-cell dns-http-cell"><select class="dns-role-select${site.httpProfileId ? "" : " dns-role-default"}" aria-label="HTTP role for ${esc(site.domain)}" onchange="dnsAssignHttp(this)">${profileOptions(httpProfiles, site.httpProfileId, HTTP_NONE)}</select></td>
     <td data-label="Mail" class="dns-role-cell dns-mail-cell"><select class="dns-role-select${site.mailProfileId ? "" : " dns-role-default"}" aria-label="Mail role for ${esc(site.domain)}" onchange="dnsAssignMail(this)">${profileOptions(mailProfiles, site.mailProfileId, MAIL_NONE)}</select>${mailWarn}</td>
     <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic, single)}</td>
-    <td class="action-cell">${managed ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
+    <td class="action-cell">${details ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
   </tr>`;
 }
 
@@ -546,7 +542,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   const sitesPanel = `${waiting}${modeBar(state)}${orphans}
     <div class="card card-table dns-site-card">
     ${plain.length ? `<div class="card-header toolbar">
-        <h2>Sites</h2>
+        <div class="dns-sites-title"><h2>Sites</h2>${ADD_DOMAIN}</div>
         ${FLEET_SELECTION_HTML}
         <div class="toolbar-end actions bulk-assign">
           <select id="bulk-http" aria-label="HTTP role for selected sites"><option value="" selected>HTTP: keep</option><option value="-">HTTP: ${HTTP_NONE}</option>${httpProfiles
@@ -560,7 +556,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
         count: plain.length,
         filters: [
           { value: "attention", label: "Needs attention" }, { value: "pending", label: "Changes waiting" }, { value: "unmanaged", label: "Not managed" },
-          ...plain.some((site) => site.redirect) ? [{ value: "redirect", label: "Redirects" }] : [],
+          ...plain.some((site) => site.redirectedBy) ? [{ value: "redirected", label: "Redirected" }] : [],
           ...valueFilters("Type", "type", plain.map(typeLabel)),
         ],
         summary: plural(plain.length, "domain"),
@@ -571,7 +567,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       </tr></thead><tbody>${sites}</tbody></table></div>
       ${FLEET_FOOTER_HTML}
       ${checked}`
-      : `<div class="card-header"><h2>Sites</h2></div><div class="empty">CloudPanel has no sites yet.</div>${checked}`}
+      : `<div class="card-header"><h2>Sites</h2>${ADD_DOMAIN}</div><div class="empty">CloudPanel has no sites yet. Add a domain to manage its DNS without one.</div>${checked}`}
     </div>`;
 
   const edgeHint = hasCloudflare
@@ -580,7 +576,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       : " Zone-wide Cloudflare SSL/TLS, Always HTTPS, and WAF rules live in the Firewall addon."
     : "";
   const profilesPanel = `<div class="card card-table"><div class="card-header"><div><h2>HTTP profiles</h2>
-      <p class="hint">Web record templates for CloudPanel sites. Redirect domains and DNS-only sites do not use an HTTP profile.${edgeHint}</p></div>
+      <p class="hint">Web record templates for sites and DNS-only domains. A domain set to DNS-only uses none.${edgeHint}</p></div>
       <div class="dns-profile-tools">
         <div class="dns-default-field"><label class="hint" for="dns-default-http">New sites HTTP</label>
           <select id="dns-default-http" onchange="dnsSetDefault('http', this)">${profileOptions(httpProfiles, state.defaultHttpProfileId, HTTP_NONE)}</select></div>
@@ -589,7 +585,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
         : '<div class="empty">No HTTP profiles yet. Create one from the Web preset.</div>'}
     </div>
     <div class="card card-table"><div class="card-header"><div><h2>Mail profiles</h2>
-      <p class="hint">Mail and custom record templates you can combine with any Site, Redirect, or DNS-only domain.</p></div>
+      <p class="hint">Mail and custom record templates you can combine with any HTTP role.</p></div>
       <div class="dns-profile-tools">
         <div class="dns-default-field"><label class="hint" for="dns-default-mail">New sites Mail</label>
           <select id="dns-default-mail" onchange="dnsSetDefault('mail', this)">${profileOptions(mailProfiles, state.defaultMailProfileId, MAIL_NONE)}</select></div>
@@ -635,6 +631,8 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   return `${heading}${sectionShellHtml("dns", "DNS sections", tabs, "sites")}`;
 }
 
+const ADD_DOMAIN = '<button class="btn" type="button" onclick="dnsAddDomain()">Add domain</button>';
+
 const field = (id: string, label: string, control: string, hint = "", full = false): string =>
   `<div class="form-field${full ? " form-field-full" : ""}"><label for="${id}">${label}</label>${control}${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
 
@@ -671,6 +669,14 @@ const DIALOGS = `
     ${switchField("mailcow", "Set up each domain in Mailcow", "Adds the domain if it is missing, gives it a DKIM key, and lets the shared mailbox send as it. A Mailcow domain is never deleted.")}</div>
     ${actions("Save profile")}
   </form></dialog>
+  <dialog id="dns-domain-dialog" aria-labelledby="dns-domain-heading"><form id="dns-domain-form" onsubmit="dnsSaveDomain(event)">
+    <div class="dialog-header"><h2 id="dns-domain-heading">Add domain</h2></div>
+    <p class="hint">A domain with no CloudPanel site, such as one that only sends mail. If a site is created at it later, the site takes it over.</p>
+    <div class="form-grid">${field("dns-domain-name", "Domain", '<input id="dns-domain-name" name="domain" required autocomplete="off" spellcheck="false" placeholder="example.org">', "", true)}
+      ${field("dns-domain-http", "HTTP", '<select id="dns-domain-http" name="httpProfileId"></select>')}
+      ${field("dns-domain-mail", "Mail", '<select id="dns-domain-mail" name="mailProfileId"></select>')}</div>
+    ${actions("Add domain")}
+  </form></dialog>
   <dialog id="dns-review-dialog" class="dns-wide-dialog" aria-labelledby="dns-review-heading">
     <div class="dialog-header"><h2 id="dns-review-heading">Review</h2></div>
     <p id="dns-review-text"></p>
@@ -680,7 +686,7 @@ const DIALOGS = `
   <dialog id="dns-site-dialog" aria-labelledby="dns-site-heading">
     <div class="dialog-header"><h2 id="dns-site-heading">Site</h2></div>
     <div id="dns-site-body"></div>
-    <div class="actions dialog-actions"><a class="btn dns-dialog-start" id="dns-site-edit" hidden href="${mountPath("redirects")}/">Open Redirects</a><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
+    <div class="actions dialog-actions"><button class="btn btn-danger dns-dialog-start" id="dns-site-remove" type="button" hidden onclick="dnsRemoveDomain(dnsSiteShown)">Remove domain</button><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
   </dialog>
   <dialog id="dns-connection-dialog" aria-labelledby="dns-connection-heading"><form id="dns-connection-form" onsubmit="dnsSaveConnection(event)">
     <div class="dialog-header"><h2 id="dns-connection-heading">Connect DNS</h2></div>

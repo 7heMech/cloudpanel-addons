@@ -7,7 +7,7 @@ import { dashboardContent } from "../addons/dns/app/views";
 import type { PanelSite } from "../addons/dns/engine";
 import { composeProfiles, MAX_PROFILES, parsePolicy, parseProfile } from "../addons/dns/model";
 import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
-import { renderProfile, renderRedirect } from "../addons/dns/records";
+import { renderProfile } from "../addons/dns/records";
 import { readEdgeConfig } from "../addons/firewall/edge";
 import { migrateCloudflareEdgeFromDns } from "../addons/firewall/migration";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
@@ -45,6 +45,7 @@ function setup() {
     panelDb: join(dir, "db.sq3"),
     redirectsPolicyFile: join(dir, "redirects", "policy.json"),
     standInsFile: join(dir, "redirects", "standins.json"),
+    redirectsStatusFile: join(dir, "redirects", "status.json"),
     rootUid: process.getuid!(),
     clpctl: "/bin/false",
   };
@@ -60,29 +61,43 @@ function setup() {
     }) as Promise<T>;
   const connect = () => act("save-connection", { token: TOKEN });
   const redirectSources: { source: string; target: string }[] = [];
-  /** Adds a redirect to Redirects' saved state, as the Redirects addon would, and gives it a Mail role in DNS. */
-  const redirect = async (source: string, target: string, mailProfileId: string | null = null, standIn = false): Promise<void> => {
-    redirectSources.push({ source, target });
+  const standIns: Record<string, unknown> = {};
+  const writeRedirects = (): void => {
     mkdirSync(join(dir, "redirects"), { recursive: true });
+    writeFileSync(paths.redirectsPolicyFile, JSON.stringify({ version: 1, automatic: true, held: [], zoneChoices: {},
+      redirects: redirectSources.map((entry) => ({ ...entry, status: 301, keepPath: true, keepQuery: true })) }), { mode: 0o600 });
+    writeFileSync(paths.standInsFile, JSON.stringify(standIns), { mode: 0o600 });
+  };
+  /** Adds a redirect to Redirects' saved state, as the Redirects addon would, with its stand-in site when given one. */
+  const redirect = (source: string, target: string, standIn?: PanelSite): void => {
+    redirectSources.push({ source, target });
     if (standIn) {
-      writeFileSync(paths.standInsFile, JSON.stringify({ [source]: { target, status: 301, keepPath: true, keepQuery: true, siteUser: "stand-in-1a2b3c4d", createdAt: START, certificate: { attempts: 0, nextAt: 0, done: false } } }), { mode: 0o600 });
+      standIns[source] = { target, status: 301, keepPath: true, keepQuery: true, siteUser: standIn.user, siteId: standIn.id, createdAt: START };
+      sites.push(standIn);
     }
-    writeFileSync(paths.redirectsPolicyFile, JSON.stringify({ version: 1, automatic: true, held: [], zoneChoices: {},
-      redirects: redirectSources.map((entry) => ({ ...entry, status: 301, keepPath: true, keepQuery: true })) }), { mode: 0o600 });
-    if (mailProfileId) await act("assign", { domains: [source], mailProfileId });
+    writeRedirects();
   };
-  const unredirect = (source: string): void => {
-    redirectSources.splice(redirectSources.findIndex((entry) => entry.source === source), 1);
-    writeFileSync(paths.redirectsPolicyFile, JSON.stringify({ version: 1, automatic: true, held: [], zoneChoices: {},
-      redirects: redirectSources.map((entry) => ({ ...entry, status: 301, keepPath: true, keepQuery: true })) }), { mode: 0o600 });
+  /** What Redirects' last check saved: the sources it serves at Cloudflare's edge. */
+  const redirectStatus = (edge: string[], tracked: string[] = []): void => {
+    mkdirSync(join(dir, "redirects"), { recursive: true });
+    const view = { id: "z", name: "example.org", status: "active", nameServers: [], account: "Agency", connection: "Agency", connectionId: "cf-1" };
+    writeFileSync(paths.redirectsStatusFile, JSON.stringify({
+      checkedAt: null,
+      plans: Object.fromEntries(redirectSources.map(({ source }) => [source, {
+        domain: source, mode: "enforce", zone: edge.includes(source) ? view : null, changes: [], problems: [], zoneChoices: [],
+      }])),
+      redirectRules: Object.fromEntries(tracked.map((source) => [source, { connectionId: "cf-1", zoneId: "z", zoneName: "example.org" }])),
+    }), { mode: 0o600 });
   };
+  const addDomain = (domain: string, roles: { httpProfileId?: string | null; mailProfileId?: string | null } = {}) =>
+    apply("add-domain", { domain, ...roles });
   const apply = async (verb: string, body?: unknown): Promise<DnsReply> => {
     const reply = await act(verb, body);
     return reply.review ? act("confirm", { token: reply.review.token }) : reply;
   };
   const records = (zone = "example.com") =>
     cf.recordsOf(zone).map((record) => `${record.type} ${record.name} ${record.content}${record.proxied ? " proxied" : ""}`).sort();
-  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, unredirect };
+  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, redirectStatus, addDomain };
 }
 
 function mailcowPanelHtml(html: string): string {
@@ -93,7 +108,7 @@ function mailcowPanelHtml(html: string): string {
 }
 
 describe("composable HTTP and Mail roles", () => {
-  test("composes Site, DNS-only, and Redirect HTTP roles independently with Mail roles", async () => {
+  test("composes Site and DNS-only HTTP roles independently with Mail roles, on sites and DNS-only domains", async () => {
     const env = setup();
     env.mc.domains.add("example.net");
     env.mc.key("example.net", "dkim");
@@ -109,8 +124,8 @@ describe("composable HTTP and Mail roles", () => {
     await env.act("assign", { domains: ["mail.example.com"], httpProfileId: null, mailProfileId: "mailcow" });
     // Site (Web) + Mail (DMARC)
     await env.act("assign", { domains: ["blog.example.com"], httpProfileId: "web", mailProfileId: "dmarc" });
-    // Redirect + Mail (Mailcow)
-    await env.redirect("old.example.org", "https://example.com", "mailcow");
+    // A DNS-only domain + Mail (Mailcow)
+    await env.addDomain("old.example.org", { mailProfileId: "mailcow" });
 
     const applied = await env.apply("set-automatic", { automatic: true });
     const siteOf = (domain: string) => applied.sites.find((entry) => entry.domain === domain)!;
@@ -118,7 +133,7 @@ describe("composable HTTP and Mail roles", () => {
     expect(siteOf("example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "google" });
     expect(siteOf("mail.example.com")).toMatchObject({ httpRole: "dns-only", httpProfileId: null, mailProfileId: "mailcow" });
     expect(siteOf("blog.example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc" });
-    expect(siteOf("old.example.org")).toMatchObject({ httpRole: "redirect", httpProfileId: null, mailProfileId: "mailcow" });
+    expect(siteOf("old.example.org")).toMatchObject({ type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: "mailcow" });
 
     const exRecords = env.records("example.com");
     // example.com gets Web + Google Workspace MX/SPF
@@ -131,7 +146,7 @@ describe("composable HTTP and Mail roles", () => {
     expect(exRecords.some((r) => r.startsWith("TXT dkim._domainkey.mail.example.com "))).toBe(true);
     expect(exRecords.some((r) => /^(A|AAAA) mail\.example\.com /.test(r))).toBe(false);
     expect(env.mc.domains.has("mail.example.com")).toBe(true);
-    // old.example.org redirect gets Mailcow mail rows; its address records are the Redirects addon's to write.
+    // old.example.org gets Mailcow mail rows and no address records.
     const oldRecords = env.records("old.example.org");
     expect(oldRecords.some((r) => /^(A|AAAA) old\.example\.org /.test(r))).toBe(false);
     expect(oldRecords).toContain("MX old.example.org mail.example.net");
@@ -143,8 +158,10 @@ describe("composable HTTP and Mail roles", () => {
     const httpOnly = await env.apply("assign", { domains: ["example.com"], httpProfileId: null });
     expect(httpOnly.sites.find((s) => s.domain === "example.com")).toMatchObject({ httpRole: "dns-only", httpProfileId: null, mailProfileId: "dmarc" });
 
-    // Refuses assigning an HTTP profile to a redirect domain.
-    await expect(env.act("assign", { domains: ["old.example.org"], httpProfileId: "web" })).rejects.toThrow("redirect domain");
+    // A DNS-only domain can take an HTTP profile too.
+    const served = await env.apply("assign", { domains: ["old.example.org"], httpProfileId: "web" });
+    expect(served.sites.find((s) => s.domain === "old.example.org")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "mailcow" });
+    expect(env.records("old.example.org")).toContain("A old.example.org 203.0.113.10 proxied");
   });
 
   test("catches cross-role conflicts, guards role boundaries, and deletes one role without touching the other or live DNS", async () => {
@@ -222,30 +239,160 @@ describe("composable HTTP and Mail roles", () => {
   });
 });
 
-describe("redirect domains run by the Redirects addon", () => {
-  test("DNS writes a Cloudflare-served redirect's Mail role and leaves its placeholder to Redirects", async () => {
+describe("DNS-only domains", () => {
+  test("an administrator adds and removes a domain with no site; its records stay and are offered with deleted sites", async () => {
+    const env = setup();
+    await env.connect();
+    await env.apply("set-automatic", { automatic: true });
+
+    await expect(env.act("add-domain", { domain: "example.com" })).rejects.toThrow("is a CloudPanel site");
+    await expect(env.act("add-domain", { domain: "old.example.org", mailProfileId: "web" })).rejects.toThrow("not a Mail profile");
+    const added = await env.addDomain("old.example.org", { mailProfileId: "google" });
+    expect(added.sites.find((s) => s.domain === "old.example.org")).toMatchObject({ type: "domain", mailProfileId: "google" });
+    expect(env.records("old.example.org")).toContain("MX old.example.org smtp.google.com");
+    await expect(env.act("add-domain", { domain: "old.example.org" })).rejects.toThrow("already listed");
+    await expect(env.act("set-panel-host", { name: "old.example.org" })).rejects.toThrow("DNS-only domain");
+    await expect(env.act("remove-records", { domain: "old.example.org" })).rejects.toThrow("still a DNS-only domain");
+
+    // A scheduled check never prunes it.
+    await env.act("check");
+    expect((await env.act("list")).sites.some((s) => s.domain === "old.example.org")).toBe(true);
+
+    const writes = env.cf.writes().length;
+    const removed = await env.act("remove-domain", { domain: "old.example.org" });
+    expect(removed.review).toBeUndefined();
+    expect(env.cf.writes().length).toBe(writes);
+    expect(removed.sites.some((s) => s.domain === "old.example.org")).toBe(false);
+    expect(removed.orphans).toEqual([expect.objectContaining({ domain: "old.example.org" })]);
+    expect(env.records("old.example.org")).toContain("MX old.example.org smtp.google.com");
+    await expect(env.act("remove-domain", { domain: "old.example.org" })).rejects.toThrow("not a DNS-only domain");
+    const listed = JSON.parse(readFileSync(join(env.dir, "state", "policy.json"), "utf8"));
+    expect(listed.domains).toEqual([]);
+    expect(listed.assignments["old.example.org"]).toBeUndefined();
+  });
+
+  test("a site created at a DNS-only domain takes it over, keeping its Mail role and taking the default HTTP role", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("set-default", { httpProfileId: "web", mailProfileId: "dmarc" });
+    await env.apply("set-automatic", { automatic: true });
+    await env.addDomain("old.example.org", { mailProfileId: "google" });
+
+    env.sites.push(site(40, "old.example.org", { createdAt: START }));
+    const synced = await env.act<{ joined: string[] }>("sync-sites");
+    expect(synced.joined).toEqual([]);
+    const state = await env.act("list");
+    expect(state.sites.filter((s) => s.domain === "old.example.org")).toEqual([
+      expect.objectContaining({ type: "php", httpProfileId: "web", mailProfileId: "google" }),
+    ]);
+    const policy = JSON.parse(readFileSync(join(env.dir, "state", "policy.json"), "utf8"));
+    expect(policy.domains).toEqual([]);
+    expect(policy.knownSiteIds).toContain(40);
+  });
+
+  test("an administrator applies a DNS-only domain's roles from its Details", async () => {
+    const env = setup();
+    await env.connect();
+    await env.apply("set-automatic", { automatic: true });
+    await env.addDomain("old.example.org", { mailProfileId: "google" });
+    env.cf.records.set(env.cf.zones.find((zone) => zone.name === "old.example.org")!.id, []);
+    const reply = await env.act<ProvisionReply>("provision", undefined, ["--domain=old.example.org"]);
+    expect(reply.managed).toBe(true);
+    expect(env.records("old.example.org")).toContain("MX old.example.org smtp.google.com");
+    await expect(env.act("provision", undefined, ["--domain=old.example.org", "--ssl"])).rejects.toThrow("CloudPanel has no site");
+  });
+});
+
+describe("Redirects' domains in DNS", () => {
+  test("a row whose domain a redirect covers carries a warning and is still planned as usual", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], httpProfileId: "web" });
+    await env.addDomain("old.example.org", { mailProfileId: "google" });
+    await env.addDomain("www.example.net");
+    env.redirect("old.example.org", "https://example.com");
+    // A redirect at an apex covers its www too.
+    env.redirect("example.net", "https://shop.example.com");
+    const state = await env.apply("set-automatic", { automatic: true });
+    expect(state.sites.find((s) => s.domain === "old.example.org")!.redirectedBy).toEqual({ source: "old.example.org", target: "https://example.com" });
+    expect(state.sites.find((s) => s.domain === "www.example.net")!.redirectedBy).toEqual({ source: "example.net", target: "https://shop.example.com" });
+    expect(state.sites.find((s) => s.domain === "mail.example.com")!.redirectedBy).toBeUndefined();
+    expect(env.records("old.example.org")).toContain("MX old.example.org smtp.google.com");
+    const html = dashboardContent(state);
+    expect(html).toContain('href="/addons/redirects/" title="old.example.org redirects to https://example.com">Redirected in Redirects</a>');
+  });
+
+  test("a local stand-in is a site with the default roles; one served at the edge is left out, keeping its roles", async () => {
     const env = setup();
     env.cf.record("old.example.org", { type: "AAAA", name: "old.example.org", content: "100::", proxied: true, ttl: 1 });
     await env.connect();
-    await env.redirect("old.example.org", "https://example.com", "google");
+    await env.act("set-default", { httpProfileId: "web" });
     await env.apply("set-automatic", { automatic: true });
-    const records = env.records("old.example.org");
-    expect(records).toContain("AAAA old.example.org 100:: proxied");
-    expect(records).toContain("MX old.example.org smtp.google.com");
-    expect(records.filter((r) => /^(A|AAAA) old\.example\.org /.test(r))).toEqual(["AAAA old.example.org 100:: proxied"]);
+
+    const standIn = site(50, "old.example.org", { type: "static", user: "stand-in-1a2b3c4d", createdAt: START });
+    env.redirect("old.example.org", "https://example.com", standIn);
+    env.redirectStatus([], []);
+    expect((await env.act<{ joined: string[] }>("sync-sites")).joined).toEqual(["old.example.org"]);
+    let state = await env.act("list");
+    expect(state.sites.find((s) => s.domain === "old.example.org")).toMatchObject({ type: "static", httpProfileId: "web", redirectedBy: expect.anything() });
+    expect(env.records("old.example.org")).toContain("A old.example.org 203.0.113.10 proxied");
+
+    // Redirects moves it to Cloudflare's edge: DNS leaves it out and writes nothing over its placeholder.
+    env.cf.records.set(env.cf.zones.find((zone) => zone.name === "old.example.org")!.id, []);
+    env.cf.record("old.example.org", { type: "AAAA", name: "old.example.org", content: "100::", proxied: true, ttl: 1 });
+    env.redirectStatus(["old.example.org"]);
+    const writes = env.cf.writes().length;
+    state = await env.act("check");
+    expect(env.cf.writes().length).toBe(writes);
+    expect(state.sites.some((s) => s.domain === "old.example.org")).toBe(false);
+    expect(state.orphans).toEqual([]);
+    let policy = JSON.parse(readFileSync(join(env.dir, "state", "policy.json"), "utf8"));
+    expect(policy.assignments["old.example.org"]).toEqual({ http: "web", mail: null });
+
+    // A tracked rule alone still counts as the edge.
+    env.redirectStatus([], ["old.example.org"]);
+    expect((await env.act("list")).sites.some((s) => s.domain === "old.example.org")).toBe(false);
+
+    // Back on this server, it is a site again with the roles it had.
+    env.redirectStatus([]);
+    state = await env.act("check");
+    expect(state.sites.find((s) => s.domain === "old.example.org")).toMatchObject({ httpProfileId: "web" });
+    policy = JSON.parse(readFileSync(join(env.dir, "state", "policy.json"), "utf8"));
+    expect(policy.knownSiteIds).toContain(50);
   });
 
-  test("DNS points a stand-in's hosts at this server, unproxied, while the stand-in serves the redirect", async () => {
+  test("Redirects' state that cannot be trusted leaves every stand-in out rather than writing over it", async () => {
     const env = setup();
     await env.connect();
-    await env.redirect("old.example.org", "https://example.com", null, true);
+    await env.act("set-default", { httpProfileId: "web" });
     await env.apply("set-automatic", { automatic: true });
-    expect(env.records("old.example.org").filter((r) => /^(A|AAAA) /.test(r))).toEqual([
-      "A old.example.org 203.0.113.10",
-      "A www.old.example.org 203.0.113.10",
-      "AAAA old.example.org 2001:db8::10",
-      "AAAA www.old.example.org 2001:db8::10",
-    ]);
+    const standIn = site(50, "old.example.org", { type: "static", user: "stand-in-1a2b3c4d", createdAt: START });
+    env.redirect("old.example.org", "https://example.com", standIn);
+
+    // Untrusted status: the stand-in is left out.
+    writeFileSync(env.paths.redirectsStatusFile, "{}", { mode: 0o644 });
+    const writes = env.cf.writes().length;
+    let state = await env.act("check");
+    expect(state.sites.some((s) => s.domain === "old.example.org")).toBe(false);
+    expect(env.cf.writes().length).toBe(writes);
+
+    // Malformed status too.
+    rmSync(env.paths.redirectsStatusFile);
+    writeFileSync(env.paths.redirectsStatusFile, "not json", { mode: 0o600 });
+    state = await env.act("list");
+    expect(state.sites.some((s) => s.domain === "old.example.org")).toBe(false);
+
+    // A site that is not a stand-in stays, even at a redirect served at the edge.
+    env.redirectStatus(["old.example.org"]);
+    writeFileSync(env.paths.standInsFile, "{}", { mode: 0o600 });
+    state = await env.act("list");
+    expect(state.sites.some((s) => s.domain === "old.example.org")).toBe(true);
+
+    // When the stand-ins cannot be read, any site at a source served at the edge is left out.
+    writeFileSync(env.paths.standInsFile, "[]", { mode: 0o600 });
+    state = await env.act("list");
+    expect(state.sites.some((s) => s.domain === "old.example.org")).toBe(false);
+    expect(state.sites.some((s) => s.domain === "example.com")).toBe(true);
   });
 });
 
@@ -280,7 +427,7 @@ describe("v1 to v2 policy migration", () => {
     });
     await env.act("assign", { domains: ["example.com"], httpProfileId: "web" });
     await env.act("assign", { domains: ["blog.example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
-    await env.redirect("old.example.org", "https://example.com", "mailcow");
+    await env.addDomain("old.example.org", { mailProfileId: "mailcow" });
     await env.apply("set-automatic", { automatic: true });
 
     // Now replace policy.json on disk with an equivalent v1 policy (including reversed profile order test separately).
@@ -312,12 +459,13 @@ describe("v1 to v2 policy migration", () => {
     expect(migrated.profiles.map((p) => `${p.id}:${p.role}`)).toEqual(["web:http", "mailcow:mail"]);
     expect(migrated.defaultHttpProfileId).toBe("web");
     expect(migrated.defaultMailProfileId).toBe("mailcow");
-    // The redirect's Mail role joins the assignments; the redirect itself moves to Redirects.
+    // The redirect's Mail role stays with DNS as a DNS-only domain; the redirect itself moves to Redirects.
     expect(migrated.assignments).toEqual({
       "example.com": { http: "web", mail: null },
       "blog.example.com": { http: "web", mail: "mailcow" },
       "old.example.org": { http: null, mail: "mailcow" },
     });
+    expect(migrated.domains).toEqual(["old.example.org"]);
     // Strictly idempotent when parsed again.
     expect(parsePolicy(migrated)).toEqual(migrated);
 
@@ -469,7 +617,7 @@ describe("Mailcow hide-until-linked tab and removal warning flow", () => {
     await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY, dkimSource: "example.net" });
     await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
     await env.act("assign", { domains: ["mail.example.com"], httpProfileId: null, mailProfileId: "mailcow" });
-    await env.redirect("old.example.org", "https://example.com", "mailcow");
+    await env.addDomain("old.example.org", { mailProfileId: "mailcow" });
     await env.apply("set-automatic", { automatic: true });
 
     const recordsBefore = env.records("example.com");
@@ -502,7 +650,7 @@ describe("Mailcow hide-until-linked tab and removal warning flow", () => {
     expect(panel).toContain("<code>old.example.org</code>");
     expect(panel).not.toContain("Domains using Mailcow");
     expect(panel).not.toContain("<input");
-    // Affected site and redirect rows carry the inline Mailcow unlinked warning badge.
+    // Affected site and domain rows carry the inline Mailcow unlinked warning badge.
     expect(html).toContain('class="badge tone-warn dns-mailcow-warn">Mailcow unlinked</span>');
 
     // Switching one domain's Mail role reduces the warning count to 2.
@@ -595,7 +743,8 @@ describe("review regressions", () => {
     expect(redirA.mail).toBe(siteA.mail);
     const redirAMail = byId(redirA.mail)!;
     expect(redirAMail.records.map((r) => `${r.type} ${r.name}`)).toEqual(["TXT _verify.{domain}"]);
-    expect(renderRedirect(redirAMail, ["redir-a.example.org"], vars("redir-a.example.org", "example.org"), false).records.map((r) => `${r.type} ${r.name}`)).toEqual([
+    expect(migrated.domains).toEqual(["redir-a.example.org", "redir-b.example.org"]);
+    expect(renderProfile(redirAMail, vars("redir-a.example.org", "example.org")).records.map((r) => `${r.type} ${r.name}`)).toEqual([
       "TXT _verify.redir-a.example.org",
     ]);
 
@@ -789,28 +938,17 @@ describe("review regressions", () => {
     expect(linked.notice).toContain("delete an unused profile");
   });
 
-  test("a redirect domain that is also a site counts its Mail role once and its HTTP role only once the redirect is gone", async () => {
-    const env = setup();
-    env.mc.domains.add("example.net");
-    env.mc.key("example.net", "dkim");
-    await env.connect();
-    await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY, dkimSource: "example.net" });
-    await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
-
-    // A redirect at a site's domain (a site recreated at an existing redirect domain) shares the domain's one assignment.
-    await env.redirect("example.com", "https://other.example");
-    const listed = await env.act("list");
-    expect(listed.profiles.find((p) => p.id === "mailcow")!.sites).toBe(1);
-    expect(listed.profiles.find((p) => p.id === "web")!.sites).toBe(0);
-    expect(listed.sites.filter((site) => site.domain === "example.com")).toEqual([expect.objectContaining({ httpRole: "redirect", mailProfileId: "mailcow" })]);
-    await expect(env.act("assign", { domains: ["example.com"], httpProfileId: "web" })).rejects.toThrow("is a redirect domain in Redirects");
-    const removed = await env.act("remove-mailcow", {});
-    expect(removed.mailcow.affectedSites).toEqual(["example.com"]);
-
-    // Once the redirect is gone, the stored HTTP role applies again.
-    env.unredirect("example.com");
-    const after = await env.act("list");
-    expect(after.profiles.find((p) => p.id === "web")!.sites).toBe(1);
-    expect(after.sites.find((site) => site.domain === "example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "mailcow" });
+  test("v2 leftovers of DNS's redirects with mail become DNS-only domains; those without mail add nothing", () => {
+    const policy = parsePolicy({
+      ...seededPolicy(),
+      assignments: { "example.com": { http: "web", mail: null } },
+      redirects: [
+        { source: "old.example.org", target: "https://example.com", mailProfileId: "google" },
+        { source: "plain.example.org", target: "https://example.com", mailProfileId: null },
+        { source: "example.com", target: "https://example.net", mailProfileId: "dmarc" },
+      ],
+    });
+    expect(policy.domains).toEqual(["old.example.org"]);
+    expect(policy.assignments).toEqual({ "example.com": { http: "web", mail: null }, "old.example.org": { http: null, mail: "google" } });
   });
 });
