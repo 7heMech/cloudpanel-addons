@@ -6,6 +6,13 @@ Redirects forwards a source domain (and its `www` when the source is a zone apex
 or a single subdomain host to another URL with a 301, 302, 307, or 308 status,
 optional path preservation, and optional query string preservation.
 
+A redirect's hosts are the ones it answers for where it resolves: its Cloudflare
+zone's hosts, or its stand-in site's hosts (the registrable domain's `www` is
+included). A plan blocks before any write when one of those hosts is a CloudPanel
+site, or when another redirect answers for one of them. The problem names both
+redirects. Hosts depend on the selected zone, so the check runs at planning, not
+when the policy is parsed.
+
 Redirects manages HTTP forwarding only. It never manages mail records (`MX`,
 `SPF`, `DKIM`, `DMARC`), verification `TXT` records, `SRV`, or `CAA` records,
 and it does not import from `addons/dns`. Operators manage non-web DNS records

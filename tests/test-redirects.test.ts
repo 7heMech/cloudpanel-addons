@@ -493,6 +493,41 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     expect(review.review!.sites[0]!.zone!.connectionId).toBe(full.id);
   });
 
+  test("blocks a redirect whose hosts include an existing CloudPanel site or another redirect's hosts", async () => {
+    const env = setup();
+    env.cf.zone("example.com", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+
+    env.sites.push({ id: 7, domain: "www.example.com", user: "www", selfSigned: false });
+    const onSite = await env.act("save-redirect", found("example.com", "https://example.net"));
+    expect(onSite.review!.blocked).toBe(true);
+    expect(onSite.review!.sites[0]!.problems).toEqual(["CloudPanel has a site www.example.com; delete the site or this redirect"]);
+    const local = await env.act("save-redirect", { ...found("local.example", "https://example.net"), mode: "local" });
+    expect(local.review!.blocked).toBe(false);
+    env.sites.push({ id: 8, domain: "www.local.example", user: "wwwlocal", selfSigned: false });
+    expect((await env.act("save-redirect", { ...found("local.example", "https://example.net"), mode: "local" })).review!.sites[0]!.problems)
+      .toEqual(["CloudPanel has a site www.local.example; delete the site or this redirect"]);
+    env.sites.splice(0);
+
+    const overlapping = await env.act("take-over", { redirects: [found("example.com", "https://a.example"), found("www.example.com", "https://b.example")] });
+    expect(overlapping.review!.blocked).toBe(true);
+    expect(overlapping.review!.sites.map((plan) => plan.problems)).toEqual([
+      ["example.com and www.example.com both answer for www.example.com; keep only one of these redirects"],
+      ["www.example.com and example.com both answer for www.example.com; keep only one of these redirects"],
+    ]);
+    expect(env.cf.writes()).toEqual([]);
+
+    const disjoint = await env.act("take-over", { redirects: [found("example.com", "https://a.example"), found("shop.example.com", "https://b.example")] });
+    expect(disjoint.review!.blocked).toBe(false);
+    await env.act("confirm", { token: disjoint.review!.token });
+    expect(env.redirectRules("example.com")).toHaveLength(2);
+
+    const later = await env.act("save-redirect", found("www.example.com", "https://b.example"));
+    expect(later.review!.blocked).toBe(true);
+    expect(later.review!.sites[0]!.problems).toContain("www.example.com and example.com both answer for www.example.com; keep only one of these redirects");
+  });
+
   test("wholeHostHosts, foundRedirect, and two-rule conflict detection", () => {
     expect(wholeHostHosts(`${apexHosts("newyou.bg")}${ACME}`)).toEqual(["newyou.bg", "www.newyou.bg"]);
     expect(wholeHostHosts('http.host eq "tv.ren.ss"')).toEqual(["tv.ren.ss"]);

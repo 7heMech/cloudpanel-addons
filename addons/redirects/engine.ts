@@ -192,6 +192,7 @@ export class RedirectsRun {
   private readonly diffs = new Map<string, PlaceholderDiff>();
   /** The selected zone, for redirects whose last plan found a rule there. */
   private readonly seen = new Map<string, ZoneRef>();
+  private hostOwners: Map<string, string[]> | null = null;
   private readonly cloudflareBackoff: { until: number };
   private readonly held: Set<string>;
   private readonly redirects: Map<string, Redirect>;
@@ -215,6 +216,7 @@ export class RedirectsRun {
   }
 
   async discover(readTokens = false): Promise<void> {
+    this.hostOwners = null;
     const results = await Promise.all(this.context.connections.map(async (connection): Promise<CloudflareConnectionReport & { refs?: ZoneRef[] }> => {
       const report: CloudflareConnectionReport = {
         id: connection.id, label: connection.label, active: false, status: "missing", accounts: [], zones: 0, error: null,
@@ -392,6 +394,32 @@ export class RedirectsRun {
     return redirect.hosts?.length ? redirect.hosts : standInHosts(redirect.source);
   }
 
+  /** The hosts `redirect` answers for where it resolves now. */
+  private effectiveHosts(redirect: Redirect): string[] {
+    const resolved = this.resolve(redirect);
+    if (resolved.kind === "zone") return redirectHosts(redirect.source, resolved.ref.zone.name);
+    if (resolved.kind === "choose") return redirectHosts(redirect.source, resolved.name);
+    return this.standInHostsFor(redirect);
+  }
+
+  /** One problem per other redirect that answers for any of `redirect`'s hosts. */
+  private overlaps(redirect: Redirect, hosts: string[]): string[] {
+    if (!this.hostOwners) {
+      this.hostOwners = new Map();
+      for (const entry of this.context.policy.redirects) {
+        for (const host of this.effectiveHosts(entry)) this.hostOwners.set(host, [...this.hostOwners.get(host) ?? [], entry.source]);
+      }
+    }
+    const shared = new Map<string, string[]>();
+    for (const host of hosts) {
+      for (const other of this.hostOwners.get(host) ?? []) {
+        if (other !== redirect.source) shared.set(other, [...shared.get(other) ?? [], host]);
+      }
+    }
+    return [...shared].map(([other, names]) =>
+      `${redirect.source} and ${other} both answer for ${names.join(" and ")}; keep only one of these redirects`);
+  }
+
   private planStandInChanges(redirect: Redirect, plan: RedirectPlan): void {
     const current = this.context.standIns?.current[redirect.source];
     const hosts = this.standInHostsFor(redirect);
@@ -431,10 +459,13 @@ export class RedirectsRun {
     this.diffs.delete(redirect.source);
     this.seen.delete(redirect.source);
     if (this.held.has(redirect.source)) plan.held = true;
-    if (this.context.siteDomains.has(redirect.source)) {
-      plan.problems.push(`CloudPanel has a site ${redirect.source}; delete the site or this redirect`);
+    const served = this.effectiveHosts(redirect);
+    const sites = [redirect.source, ...served].filter((host, index, all) => all.indexOf(host) === index && this.context.siteDomains.has(host));
+    if (sites.length) {
+      plan.problems.push(`CloudPanel has a site ${sites.join(" and ")}; delete the site or this redirect`);
       return plan;
     }
+    plan.problems.push(...this.overlaps(redirect, served));
     plan.problems.push(...this.failures.get(redirect.source) ?? []);
 
     const resolved = this.resolve(redirect);
