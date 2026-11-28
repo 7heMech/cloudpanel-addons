@@ -428,7 +428,8 @@ the token read its own permissions; it exposes token metadata, never a secret.
 Zone Edit is included for Automatic zone creation; Cloudflare refuses a zone
 create without it by naming `account.zone.create`, which the page reports as
 Zone Edit. Selecting Cloudflare edge defaults adds Zone Settings Edit, Config
-Rules Edit, and Zone WAF Edit (when WAF skip IPs are configured). Selecting
+Rules Edit, and Zone WAF Edit (when WAF skip IPs are configured, or a zone
+still holds the skip rule an emptied list removes). Selecting
 Panel gate adds SSL and Certificates Edit, Access: Apps and Policies Edit, and
 Access: Organizations, Identity Providers, and Groups Edit. The URL uses the
 keys in Cloudflare's

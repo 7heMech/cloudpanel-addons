@@ -22,7 +22,7 @@
 import { errorMessage } from "../lib/errors";
 import { readJsonRequest } from "../lib/action";
 import {
-  checkCloudflareConnections, cloudflareConnectionViews, readFirewallEdgeDefaults, removeCloudflareConnection,
+  checkCloudflareConnections, cloudflareConnectionViews, readFirewallEdgeNeeds, removeCloudflareConnection,
   saveCloudflareConnection, type CloudflareStorePaths,
 } from "../lib/cloudflare/store";
 import { tokenTemplates } from "../lib/cloudflare/tokens";
@@ -522,27 +522,27 @@ export async function runManagerAction(
         return 0;
       }
       case "cloudflare-list": {
-        const edge = readFirewallEdgeDefaults();
+        const edge = readFirewallEdgeNeeds();
         const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
         return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge) } }, options.emitReply !== false);
       }
       case "cloudflare-save": {
         const body = await readJsonRequest(options.input, 32 * 1024);
         const saved = await saveCloudflareConnection(body, options.cloudflare);
-        const edge = readFirewallEdgeDefaults();
+        const edge = readFirewallEdgeNeeds();
         const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
         return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge), id: saved.id, notice: saved.notice } }, options.emitReply !== false);
       }
       case "cloudflare-remove": {
         const body = await readJsonRequest(options.input, 4 * 1024);
         const removed = await removeCloudflareConnection(String(body.id ?? ""), options.cloudflare);
-        const edge = readFirewallEdgeDefaults();
+        const edge = readFirewallEdgeNeeds();
         const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
         return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge), notice: removed.notice } }, options.emitReply !== false);
       }
       case "cloudflare-check": {
         await checkCloudflareConnections(options.cloudflare);
-        const edge = readFirewallEdgeDefaults();
+        const edge = readFirewallEdgeNeeds();
         const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
         return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge), notice: "Checked Cloudflare connections." } }, options.emitReply !== false);
       }

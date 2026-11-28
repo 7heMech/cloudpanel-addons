@@ -44,7 +44,7 @@ import { readState, writeState } from "../../lib/root-state";
 import { accessView, type AccessView } from "../../lib/cloudflare/access";
 import {
   cloudflareTokenHolds, hasSharedCloudflareStore, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
-  readFirewallEdgeDefaults, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
+  readFirewallEdgeNeeds, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
   type CloudflareStorePaths,
 } from "../../lib/cloudflare/store";
 import { tokenTemplate, tokenTemplates, type PermissionName, type TokenTemplate, type TokenTemplates } from "../../lib/cloudflare/tokens";
@@ -800,7 +800,7 @@ class Action {
             provider: "cloudflare",
             label: connection.label,
             hasToken: Boolean(secrets.cloudflare[connection.id]),
-            access: stored?.active ? accessView(stored, readFirewallEdgeDefaults({ rootUid: this.paths.rootUid }), { includeDns: true, includeEdge: false, requirePanelGate: false }) : null,
+            access: stored?.active ? accessView(stored, readFirewallEdgeNeeds({ rootUid: this.paths.rootUid }), { includeDns: true, includeEdge: false, requirePanelGate: false }) : null,
           };
         }),
         ...(policy.powerdns ?? []).map((connection): DnsConnectionView => {
@@ -832,8 +832,8 @@ class Action {
         .map(([domain, entry]) => ({ domain, zone: entry.zoneName, records: entry.records.length })),
       checkedAt: status.checkedAt,
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow, status.backoff.powerdns ?? 0),
-      token: tokenTemplate(readFirewallEdgeDefaults({ rootUid: this.paths.rootUid }), { dns: true }),
-      tokens: tokenTemplates(readFirewallEdgeDefaults({ rootUid: this.paths.rootUid })),
+      token: tokenTemplate(readFirewallEdgeNeeds({ rootUid: this.paths.rootUid }), { dns: true }),
+      tokens: tokenTemplates(readFirewallEdgeNeeds({ rootUid: this.paths.rootUid })),
       firewallEnabled: existsSync(addonConfigFile("firewall")),
       redirectsEnabled: existsSync(addonConfigFile("redirects")),
       presets: presetsFor(mailcowLinked),

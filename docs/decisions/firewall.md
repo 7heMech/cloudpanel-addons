@@ -341,7 +341,10 @@ read only local files and make zero Cloudflare API calls.
 
 `Zone Settings: Edit`, `Config Rules: Edit`, and `Zone WAF: Edit` live in
 `lib/cloudflare/tokens.ts` as `edge` permissions: required on Firewall when the
-corresponding default is enabled and optional on DNS. The shared Connect
+corresponding default is enabled, or while `trackedManagedRules` still holds a
+rule the defaults no longer want (`pendingRuleCleanup`), since removing it
+needs the same edit; optional on DNS. `readFirewallEdgeNeeds` in
+`lib/cloudflare/store.ts` gives DNS, Redirects and Manager both. The shared Connect
 Cloudflare dialog offers independent checkboxes for DNS records, Cloudflare edge
 defaults, and Panel gate so operators can mint minimal or combined tokens.
 

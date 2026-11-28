@@ -22,7 +22,7 @@ import {
   accessView, grants, readAccess, selfReadPermission, targetFor, uncertain, type AccessView, type Reached, type TokenAccess,
 } from "./access";
 import { CloudflareApi, UnreadableToken, type CfAccount, type CfZone, type Verified } from "./api";
-import { DEFAULT_EDGE_DEFAULTS, parseEdgeDefaults, type EdgeDefaults } from "./edge";
+import { DEFAULT_EDGE_DEFAULTS, parseEdgeDefaults, pendingRuleCleanup } from "./edge";
 import { PERMISSIONS, type EdgePermissionNeeds, type PermissionName, type PermissionScopeOptions } from "./tokens";
 
 export const MAX_CLOUDFLARE_CONNECTIONS = 12;
@@ -162,21 +162,33 @@ export function hasSharedCloudflareStore(paths?: Partial<CloudflareStorePaths>):
 }
 
 /**
- * Reads Firewall's saved Cloudflare edge defaults for building token templates
- * and permission tables without importing `addons/firewall`. Falls back to
- * `DEFAULT_EDGE_DEFAULTS` when no edge config exists yet so newly created
- * tokens include Zone Settings and Config Rules edits by default.
+ * Reads what Firewall's Cloudflare edge needs of a token, for building token
+ * templates and permission tables without importing `addons/firewall`: its
+ * saved defaults, and the managed rules some zone still holds that they no
+ * longer want. Falls back to `DEFAULT_EDGE_DEFAULTS` when no edge config
+ * exists yet so newly created tokens include Zone Settings and Config Rules
+ * edits by default.
  */
-export function readFirewallEdgeDefaults(options: { firewallDir?: string; rootUid?: number } = {}): EdgeDefaults {
+export function readFirewallEdgeNeeds(options: { firewallDir?: string; rootUid?: number } = {}): EdgePermissionNeeds {
   const firewallDir = options.firewallDir ?? addonStateDir("firewall");
   const rootUid = options.rootUid ?? ROOT_UID;
+  let defaults = { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: [...DEFAULT_EDGE_DEFAULTS.skipFirewallIps] };
   try {
     const raw = readState<{ defaults?: unknown } | null>(join(firewallDir, "cloudflare-edge.json"), rootUid, () => null);
     if (raw && typeof raw === "object" && raw.defaults && typeof raw.defaults === "object") {
-      return parseEdgeDefaults(raw.defaults);
+      defaults = parseEdgeDefaults(raw.defaults);
     }
   } catch { /* fall back to recommended defaults */ }
-  return { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: [...DEFAULT_EDGE_DEFAULTS.skipFirewallIps] };
+  let tracked: Record<string, string[]> = {};
+  try {
+    const status = readState<{ trackedManagedRules?: unknown } | null>(join(firewallDir, "cloudflare-edge-status.json"), rootUid, () => null);
+    const raw = status?.trackedManagedRules;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      tracked = Object.fromEntries(Object.entries(raw).map(([zone, keys]) => [zone, Array.isArray(keys) ? keys.map(String) : []]));
+    }
+  } catch { /* no cleanup known */ }
+  const cleanup = pendingRuleCleanup(defaults, tracked);
+  return cleanup.length ? { ...defaults, cleanup } : defaults;
 }
 
 /** Reads only saved Cloudflare connections metadata (never touches secrets.json). */

@@ -74,6 +74,17 @@ const RULE_SUBJECTS: Record<EdgeRuleKey, string> = {
   skip: "WAF skip rule",
 };
 
+/** Managed rules a zone still holds that `defaults` no longer want; removing them needs the same edit permission. */
+export function pendingRuleCleanup(defaults: EdgeDefaults, tracked: Record<string, readonly string[]>): EdgeRuleKey[] {
+  const held = new Set(Object.values(tracked).flat());
+  const wanted: Record<EdgeRuleKey, boolean> = {
+    acme: defaults.acmeFullSsl,
+    webmail: defaults.webmailFullSsl,
+    skip: defaults.skipFirewallIps.length > 0,
+  };
+  return (["acme", "webmail", "skip"] as const).filter((key) => held.has(key) && !wanted[key]);
+}
+
 export const RULE_PHASES: Record<EdgeRuleKey, string> = {
   acme: CONFIG_PHASE,
   webmail: CONFIG_PHASE,

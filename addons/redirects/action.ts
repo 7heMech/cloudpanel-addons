@@ -16,7 +16,7 @@ import { ActionFailure, failAction, readJsonRequest, replyToAction } from "../..
 import { detectAddresses, type Addresses } from "../../lib/addresses";
 import {
   cloudflareConnectionViews, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
-  readFirewallEdgeDefaults, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
+  readFirewallEdgeNeeds, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
   type CloudflareConnectionView, type CloudflareStorePaths,
 } from "../../lib/cloudflare/store";
 import { tokenTemplates, type TokenTemplates } from "../../lib/cloudflare/tokens";
@@ -421,7 +421,7 @@ class Action {
     const policy = this.files.policy();
     const status = this.files.status();
     const standIns = this.standIns().current;
-    const edge = readFirewallEdgeDefaults({ rootUid: this.paths.rootUid });
+    const edge = readFirewallEdgeNeeds({ rootUid: this.paths.rootUid });
     const cf = cloudflareConnectionViews(edge, { includeDns: false, requireRedirects: true }, this.files.cfPaths);
     const detected = this.addresses();
     const serverIps = [detected.ipv4, detected.ipv6].filter((ip): ip is string => Boolean(ip));

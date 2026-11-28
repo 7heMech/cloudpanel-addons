@@ -18,7 +18,7 @@ import { connectionPermissions } from "../../lib/cloudflare/access";
 import { CloudflareApi, type CfRuleset, type CfZone } from "../../lib/cloudflare/api";
 import {
   CONFIG_PHASE, DEFAULT_EDGE_DEFAULTS, FIREWALL_PHASE, RULE_PHASES, describeEdgeDefaults, edgeDefaultsDigest, hasActiveEdgeDefaults,
-  parseEdgeDefaults, planZoneEdge, type EdgeDefaults, type EdgeRuleKey, type LiveZoneEdgeState, type PlannedEdgeChange,
+  parseEdgeDefaults, pendingRuleCleanup, planZoneEdge, type EdgeDefaults, type EdgeRuleKey, type LiveZoneEdgeState, type PlannedEdgeChange,
   type ZoneCurrentSummary,
 } from "../../lib/cloudflare/edge";
 import {
@@ -473,10 +473,11 @@ async function discoverZones(
   }
 
   // Prefer a connection whose stored token report holds the required edge permissions.
+  const needs = { ...defaults, cleanup: pendingRuleCleanup(defaults, readEdgeStatus(paths).trackedManagedRules ?? {}) };
   const connScore = (connId: string): number => {
     const stored = store.reports.find((entry) => entry.id === connId);
     if (!stored?.active || !stored.token?.readable) return 0;
-    const { missing } = connectionPermissions(stored, defaults, { includeDns: false, includeEdge: true, requirePanelGate: false });
+    const { missing } = connectionPermissions(stored, needs, { includeDns: false, includeEdge: true, requirePanelGate: false });
     return missing.length === 0 ? 1 : -missing.length;
   };
 
@@ -1396,7 +1397,8 @@ export function edgeActionNeeded(options?: EdgeOptions): ActionNeeded[] {
       if (!store.tokens[connection.id]) continue;
       const report = store.reports.find((entry) => entry.id === connection.id);
       if (!report?.active) continue;
-      const { missing } = connectionPermissions(report, config.defaults, {
+      const needs = { ...config.defaults, cleanup: pendingRuleCleanup(config.defaults, status.trackedManagedRules ?? {}) };
+      const { missing } = connectionPermissions(report, needs, {
         includeDns: false,
         includeEdge: true,
         requirePanelGate: false,
