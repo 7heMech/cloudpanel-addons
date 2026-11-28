@@ -32,15 +32,15 @@ const TTLS = [1, 60, 120, 300, 600, 900, 1800, 3600, 7200, 18000, 43200, 86400];
 export const PROFILE_ROLES = ["http", "mail"] as const;
 export type ProfileRole = (typeof PROFILE_ROLES)[number];
 
-/** A domain's mutually exclusive HTTP role: serving a CloudPanel site, redirecting elsewhere, or DNS-only (no HTTP records). */
-export type HttpRole = "site" | "redirect" | "dns-only";
+/** A domain's HTTP role: an HTTP profile's records, or DNS-only (no HTTP records). */
+export type HttpRole = "site" | "dns-only";
 export const PROXIABLE: readonly RecordType[] = ["A", "AAAA", "CNAME"];
 const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
 
 export const MAX_PROFILES = 48;
 const MAX_RECORDS = 60;
 export const MAX_CONNECTIONS = 12;
-const MAX_REDIRECTS = 500;
+export const MAX_DOMAINS = 500;
 const NAME_MAX = 40;
 
 export interface RecordTemplate {
@@ -69,26 +69,11 @@ export interface Profile {
   mailcow: boolean;
 }
 
-/** Composable roles assigned to a CloudPanel site. Null `http` is DNS-only (no web records managed). */
+/** Composable roles assigned to a domain. Null `http` is DNS-only (no web records managed). */
 export interface SiteAssignment {
   http: string | null;
   mail: string | null;
 }
-
-/** A host whose requests Cloudflare, or a stand-in site on this server, sends elsewhere. */
-export interface Redirect {
-  /** A zone apex, which covers its `www` too, or one host inside a zone. */
-  source: string;
-  target: string;
-  status: RedirectStatus;
-  keepPath: boolean;
-  keepQuery: boolean;
-  /** Optional Mail profile whose records (and Mailcow setup) apply alongside the redirect. */
-  mailProfileId: string | null;
-}
-
-export const REDIRECT_STATUSES = [301, 302, 307, 308] as const;
-export type RedirectStatus = (typeof REDIRECT_STATUSES)[number];
 
 export interface Connection {
   id: string;
@@ -134,9 +119,10 @@ export interface Policy {
   defaultHttpProfileId: string | null;
   /** Default Mail profile for new CloudPanel sites; null leaves Mail as None. */
   defaultMailProfileId: string | null;
-  /** Domain to its HTTP and Mail profile ids. A site that is absent is left alone. */
+  /** Domain to its HTTP and Mail profile ids, for sites and `domains` alike. A domain that is absent is left alone. */
   assignments: Record<string, SiteAssignment>;
-  redirects: Redirect[];
+  /** Domains an administrator added with no CloudPanel site behind them. */
+  domains: string[];
   knownSiteIds: number[];
   /** New sites whose changes beyond their own address records wait for an administrator's review. */
   held: string[];
@@ -200,6 +186,15 @@ function optionalHostname(value: unknown, what: string): string {
 export function profileId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) failAction("that is not a profile identifier");
   return value;
+}
+
+function safeHostname(value: unknown): string | null {
+  try {
+    return hostname(value, "a domain");
+  } catch (error) {
+    if (error instanceof ActionFailure) return null;
+    throw error;
+  }
 }
 
 function flag(value: unknown, what: string): boolean {
@@ -477,6 +472,7 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
   mailcow: MailcowSettings;
   panelHost: string | null;
   knownSiteIds: number[];
+  domains: string[];
 }): { policy: Policy; mapping: Map<string, SiteAssignment> } {
   const legacyProfiles = (raw.profiles as unknown[]).map(parseLegacyProfile);
   if (legacyProfiles.length > MAX_PROFILES) failAction(`at most ${MAX_PROFILES} profiles`);
@@ -625,21 +621,23 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
     if (mapped && (mapped.http || mapped.mail)) assignments[domain] = { ...mapped };
   }
 
-  const redirects = parseRedirects(
-    rawRedirects.map((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
-      const item = entry as Record<string, unknown>;
-      const legacyId = typeof item.profileId === "string" ? item.profileId : null;
-      const mappedMail = legacyId ? (mapping.get(legacyId)?.mail ?? null) : null;
-      return { ...item, mailProfileId: item.mailProfileId ?? mappedMail };
-    }),
-    mailIds,
-  );
+  // A redirect domain with mail keeps it as a DNS-only domain; the redirect itself moves to Redirects.
+  const domains = new Set<string>();
+  for (const entry of rawRedirects) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const source = safeHostname(item.source);
+    const legacyId = typeof item.profileId === "string" ? item.profileId : null;
+    const mail = legacyId ? (mapping.get(legacyId)?.mail ?? null) : null;
+    if (source && mail && mailIds.has(mail)) {
+      assignments[source] = { http: assignments[source]?.http ?? null, mail };
+      domains.add(source);
+    }
+  }
 
   const defaultMapped = legacyDefault ? mapping.get(legacyDefault) : undefined;
   const heldRaw = Array.isArray(raw.held) ? raw.held : [];
-  const held = [...new Set(heldRaw.filter((domain): domain is string => typeof domain === "string"
-    && (Boolean(assignments[domain]) || redirects.some((redirect) => redirect.source === domain))))];
+  const held = [...new Set(heldRaw.filter((domain): domain is string => typeof domain === "string" && Boolean(assignments[domain])))];
 
   return {
     policy: {
@@ -650,7 +648,7 @@ function migrateV1PolicyWithMapping(raw: Record<string, unknown>, base: {
       defaultHttpProfileId: defaultMapped?.http ?? null,
       defaultMailProfileId: defaultMapped?.mail ?? null,
       assignments,
-      redirects,
+      domains: [...new Set([...base.domains, ...domains])].slice(0, MAX_DOMAINS),
       held,
       knownSiteIds: base.knownSiteIds,
       connections: base.connections,
@@ -681,6 +679,9 @@ function parsePolicyBase(raw: Record<string, unknown>) {
   const serverRaw = (raw.server ?? {}) as Record<string, unknown>;
   const knownSiteIds = [...new Set(((Array.isArray(raw.knownSiteIds) ? raw.knownSiteIds : []) as unknown[])
     .filter((id): id is number => typeof id === "number" && Number.isSafeInteger(id) && id > 0))];
+  if (raw.domains !== undefined && !Array.isArray(raw.domains)) failAction("the DNS-only domains must be a list");
+  const domains = [...new Set(((raw.domains ?? []) as unknown[]).map((domain) => hostname(domain, "a DNS-only domain")))];
+  if (domains.length > MAX_DOMAINS) failAction(`at most ${MAX_DOMAINS} DNS-only domains can be added`);
   return {
     automatic: legacy.automatic,
     // Cloudflare connections live in the shared store, so a cf-* createIn stays valid even when policy.json's legacy list is empty.
@@ -695,6 +696,7 @@ function parsePolicyBase(raw: Record<string, unknown>) {
     mailcow: parseMailcow(raw.mailcow),
     panelHost: raw.panelHost == null ? null : hostname(raw.panelHost, "the panel hostname"),
     knownSiteIds,
+    domains,
   };
 }
 
@@ -790,10 +792,20 @@ export function parsePolicy(value: unknown): Policy {
       const parsed = parseAssignment(entry, httpIds, mailIds);
       if (parsed) assignments[hostname(domain, "an assigned site")] = parsed;
     }
-    const redirects = parseRedirects(raw.redirects, mailIds);
+    // Redirects not yet moved to Redirects keep their Mail role here, as DNS-only domains.
+    const domains = new Set(base.domains);
+    for (const entry of Array.isArray(raw.redirects) ? raw.redirects : []) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const item = entry as Record<string, unknown>;
+      const source = safeHostname(item.source);
+      const mail = typeof item.mailProfileId === "string" && mailIds.has(item.mailProfileId) ? item.mailProfileId : null;
+      if (!source || !mail) continue;
+      if (!assignments[source]) assignments[source] = { http: null, mail };
+      if (assignments[source]!.mail) domains.add(source);
+    }
+    if (domains.size > MAX_DOMAINS) failAction(`the redirects' Mail roles do not fit in ${MAX_DOMAINS} DNS-only domains`);
     const heldRaw = Array.isArray(raw.held) ? raw.held : [];
-    const held = [...new Set(heldRaw.filter((domain): domain is string => typeof domain === "string"
-      && (Boolean(assignments[domain]) || redirects.some((redirect) => redirect.source === domain))))];
+    const held = [...new Set(heldRaw.filter((domain): domain is string => typeof domain === "string" && Boolean(assignments[domain])))];
     const defaultHttp = typeof raw.defaultHttpProfileId === "string" && httpIds.has(raw.defaultHttpProfileId)
       ? raw.defaultHttpProfileId : null;
     const defaultMail = typeof raw.defaultMailProfileId === "string" && mailIds.has(raw.defaultMailProfileId)
@@ -807,7 +819,7 @@ export function parsePolicy(value: unknown): Policy {
       defaultHttpProfileId: defaultHttp,
       defaultMailProfileId: defaultMail,
       assignments,
-      redirects,
+      domains: [...domains],
       held,
       knownSiteIds: base.knownSiteIds,
       connections: base.connections,
@@ -823,53 +835,18 @@ export function parsePolicy(value: unknown): Policy {
   }
 }
 
-/** An absolute http(s) URL with no credentials or fragment; with the path kept, no query either, and no trailing slash. */
-function redirectTarget(value: unknown, keepPath: boolean): string {
-  if (typeof value !== "string") failAction("The target must be a URL, such as https://example.com");
-  let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    failAction("The target must be a URL, such as https://example.com");
-  }
-  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || url.hash || !dnsName(url.hostname)) {
-    failAction("The target must be an http or https URL, such as https://example.com");
-  }
-  if (keepPath && url.search) failAction("A target that keeps the path cannot have a query string");
-  const text = url.href;
-  if (/["'$;{}\\\s]/.test(text) || text.length > 1024) failAction("The target has characters a redirect cannot carry");
-  return keepPath ? text.replace(/\/+$/, "") : text;
-}
-
-export function parseRedirect(value: unknown, mailProfiles?: Set<string>): Redirect {
-  if (!value || typeof value !== "object" || Array.isArray(value)) failAction("the redirect is malformed");
-  const raw = value as Record<string, unknown>;
-  const source = hostname(raw.source, "The redirect's domain");
-  const keepPath = flag(raw.keepPath ?? true, "Keep path");
-  const target = redirectTarget(raw.target, keepPath);
-  const host = new URL(target).hostname;
-  if (host === source || host === `www.${source}`) failAction(`${source} cannot redirect to itself`);
-  const status = REDIRECT_STATUSES.find((code) => code === Number(raw.status ?? 301));
-  if (!status) failAction("The status must be 301, 302, 307 or 308");
-  const rawMail = raw.mailProfileId !== undefined ? raw.mailProfileId : raw.profileId;
-  const mail = rawMail == null || rawMail === "" ? null : profileId(rawMail);
-  return {
-    source, target, status, keepPath, keepQuery: flag(raw.keepQuery ?? true, "Keep query string"),
-    mailProfileId: mail && (!mailProfiles || mailProfiles.has(mail)) ? mail : null,
-  };
-}
-
-export function parseRedirects(value: unknown, mailProfiles?: Set<string>): Redirect[] {
-  if (value == null) return [];
-  if (!Array.isArray(value)) failAction("the redirects must be a list");
-  if (value.length > MAX_REDIRECTS) failAction(`at most ${MAX_REDIRECTS} redirect domains`);
-  const redirects = value.map((entry) => parseRedirect(entry, mailProfiles));
-  const seen = new Set<string>();
-  for (const redirect of redirects) {
-    if (seen.has(redirect.source)) failAction(`${redirect.source} is listed as a redirect twice`);
-    seen.add(redirect.source);
-  }
-  return redirects.sort((a, b) => a.source.localeCompare(b.source));
+/**
+ * A saved policy in its current version with each redirect that had mail
+ * already a DNS-only domain with that Mail role, for Redirects' upgrade
+ * migration to write back once it has taken the redirects themselves. Legacy `connections` and profile `zone`
+ * blocks stay for their own migrations.
+ */
+export function upgradeSavedPolicy(onDisk: unknown): Record<string, unknown> {
+  const raw = (onDisk ?? {}) as Record<string, unknown>;
+  const policy = parsePolicy(raw);
+  const zones = legacyProfileZones(raw);
+  const profiles = policy.profiles.map((profile) => zones.has(profile.id) ? { ...profile, zone: zones.get(profile.id) } : profile);
+  return { ...policy, profiles, connections: Array.isArray(raw.connections) ? raw.connections : [] };
 }
 
 export function parseSecrets(value: unknown): Secrets {

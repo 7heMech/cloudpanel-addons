@@ -4,11 +4,13 @@
 
 DNS keeps each CloudPanel site's records to its HTTP and Mail profiles across
 Cloudflare or PowerDNS Authoritative API v1, so that creating a site is enough
-to publish it, and serves redirect domains. Mailcow is an optional Mail role
-integration that sets up the domain, its DKIM key, and a shared mailbox's
-permission to send as it. The addon replaces infrastructure-as-code for these
-records rather than coexisting with it. It follows the panel's site list, and
-once it is Automatic what it writes cannot drift.
+to publish it, and does the same for domains an administrator adds with no site
+behind them. Redirects run in the standalone [Redirects](redirects.md) addon,
+which never touches mail; DNS only warns on rows a redirect covers. Mailcow is an optional Mail role integration
+that sets up the domain, its DKIM key, and a shared mailbox's permission to send
+as it. The addon replaces infrastructure-as-code for these records rather than
+coexisting with it. It follows the panel's site list, and once it is Automatic
+what it writes cannot drift.
 
 Nothing about one operator's setup is built in. The server's addresses are
 detected, the Mailcow host, key policy, and mailbox are settings, and the
@@ -17,21 +19,20 @@ records are rows anyone can edit.
 ## Provider adapter and capabilities
 
 `addons/dns/provider.ts` defines the provider-neutral `DnsProvider` interface
-and `ProviderCapabilities` flags (`proxy`, `edgeRedirects`, `createZone`,
-`autoTtl`, and `comments`). Before `diffRecords` runs,
+and `ProviderCapabilities` flags (`proxy`, `createZone`, `autoTtl`, and
+`comments`). Before `diffRecords` runs,
 `normalizeRenderedForProvider` strips `proxied` when `!capabilities.proxy` and
 resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
 `!capabilities.autoTtl`.
 
 - **Cloudflare (`addons/dns/cloudflare-provider.ts`).** Wraps
-  `lib/cloudflare/api.ts`, sets all five capability flags to `true`, applies
-  per-record POST/PATCH/DELETE calls in order, and exposes Single Redirect
-  rulesets behind `.edge`. Zone-wide SSL/TLS, Always Use HTTPS, Full SSL rules,
+  `lib/cloudflare/api.ts`, sets all four capability flags to `true`, applies
+  per-record POST/PATCH/DELETE calls in order. Zone-wide SSL/TLS, Always Use HTTPS, Full SSL rules,
   and WAF skip IPs live in [Firewall](firewall.md#cloudflare-edge-defaults).
 - **PowerDNS (`addons/dns/powerdns.ts`).** Talks to PowerDNS Authoritative
   Server HTTP API v1 over `ProviderHttp` (`redirect: "error"`, `X-API-Key`
   header, 15-second deadline, 8 MiB response cap). Capabilities have `proxy`,
-  `edgeRedirects`, `autoTtl`, and `comments` set to `false`, and `createZone`
+  `autoTtl`, and `comments` set to `false`, and `createZone`
   driven by the connection's `createZones` switch.
   - **Transport policy.** `parsePowerDnsUrl` accepts `https://` for any valid
     host and allows plain `http://` only for `localhost`, IPv4 loopback
@@ -74,21 +75,17 @@ resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
   or `records.ts`.
 
 Cloudflare-only UI controls hide when no Cloudflare connection exists (the Proxy
-column and Find redirects in Cloudflare). When both Cloudflare and PowerDNS
-connections exist, proxy controls note that they apply to Cloudflare zones only.
+column). When both Cloudflare and PowerDNS connections exist, proxy controls
+note that they apply to Cloudflare zones only.
 
-On zones where `capabilities.edgeRedirects` is `false`, redirect domains keep
-their local stand-in site active on this server and write unproxied `A` and
-`AAAA` records pointing to this server's addresses instead of Cloudflare's
-`AAAA 100::` placeholder, while still applying non-web profile rows such as MX,
-SPF, and DKIM. On zones where `capabilities.proxy` is `false`, the panel
-hostname stays unproxied, hands off to matching unproxied wildcards, and makes
-no proxy change when CloudPanel issues its certificate.
+On zones where `capabilities.proxy` is `false`, the panel hostname stays
+unproxied, hands off to matching unproxied wildcards, and makes no proxy change
+when CloudPanel issues its certificate.
 
 ## Profiles and roles
 
-DNS separates each domain's mutually exclusive HTTP role (Site, Redirect, or
-DNS-only) from its independent Mail role (None, Mailcow, Google Workspace,
+DNS separates each domain's HTTP role (an HTTP profile, or DNS-only) from its
+independent Mail role (None, Mailcow, Google Workspace,
 DMARC, or custom record templates). Profiles are tagged with `role: "http"` or
 `role: "mail"`, so operators compose an HTTP profile and a Mail profile instead
 of maintaining combinatorial profiles such as "Web and Mailcow".
@@ -96,9 +93,8 @@ of maintaining combinatorial profiles such as "Web and Mailcow".
 - A CloudPanel site picks an HTTP profile for the Site HTTP role, or leaves
   HTTP unset for DNS-only (no web records written by DNS), and independently
   picks a Mail profile or None. When both are unset, DNS leaves the site alone.
-- A redirect domain has the Redirect HTTP role (mutually exclusive with Site
-  and DNS-only) and independently picks a Mail profile (`mailProfileId`) or
-  None.
+- A DNS-only domain (see [DNS-only domains](#dns-only-domains)) picks its
+  roles the same way.
 - Defaults for new sites are stored separately as `defaultHttpProfileId` and
   `defaultMailProfileId`. Setting either default or assigning a site records
   the site ids that exist then, so defaults never reach back over existing
@@ -153,9 +149,10 @@ deterministically without altering live DNS records:
   custom TXT or CAA records) move into the Mail role and web rows stay in the
   HTTP role, so migrated redirects keep every custom record without copying web
   rows.
-- Site assignments map from `profileId` to `{ http, mail }`, redirect
-  `profileId` maps to the migrated `mailProfileId`, and `defaultProfileId` maps
-  to `defaultHttpProfileId` and `defaultMailProfileId`.
+- Site assignments map from `profileId` to `{ http, mail }`, a redirect whose
+  `profileId` has mail rows makes its source a DNS-only domain with
+  `{ http: null, mail }` (a redirect with no mail adds nothing), and
+  `defaultProfileId` maps to `defaultHttpProfileId` and `defaultMailProfileId`.
 - If DNS saves a v2 `policy.json` before Firewall migrates legacy Cloudflare
   edge options, `legacyProfileZones` gives each migrated v2 HTTP and Mail
   profile the `zone` blocks of the v1 profiles folded into it, counting only
@@ -189,7 +186,7 @@ wildcard in the zone matches the exact address set and proxy state under RFC
 CNAME left at that name. Any record at or below the subdomain, or at an
 intermediate ancestor with no wildcard of its own, stops a broader wildcard from
 matching; DNS then writes explicit A and AAAA records and reports which record
-blocked the wildcard. Within a zone, wildcard writers run first, redirects and
+blocked the wildcard. Within a zone, wildcard writers run first,
 explicit or non-address writers next from deepest name to shallowest, blocked
 explicit subdomain sites after those, and wildcard-covered sites last. Each site
 re-plans against live zone records before writing, so redundant subdomain records
@@ -216,29 +213,29 @@ every sender is left exactly as written.
 
 Until a DNS provider connection exists, the page replaces the full workspace
 with a focused first-run setup card that links straight to Connect Cloudflare
-and Connect PowerDNS and, when stand-in redirects already exist, **Check now**,
-the Redirects card, and the Ask-first bar or Automatic sync toggle.
+and Connect PowerDNS.
 Once connected, the page uses the shared `.section-shell` navigation to split
-into six sections: Sites, Redirects, Profiles, Mailcow, Settings, and Activity.
-Deep links such as `#dns-connection`, `#dns-panel-host`, `#dns-mode`, and
-`#mailcow` open the matching section automatically.
+into five sections: Sites, Profiles, Mailcow, Settings, and Activity. Deep links
+such as `#dns-connection`, `#dns-panel-host`, `#dns-mode`, and `#mailcow` open
+the matching section automatically.
 
 The Sites section holds the site table, the Ask-first banner while Automatic is
 off, and any deleted-site orphan records. Each site row has separate HTTP
 (`DNS-only` or an HTTP profile) and Mail (`None` or a Mail profile) selectors,
-and bulk assignment can update HTTP, Mail, or both independently. Sites has the
-shared search from six sites, filters for needs attention, changes waiting, not
-managed, and site runtime, sorting on every heading, and desktop bulk controls
-that stay hidden until at least one row is ticked. When only one DNS connection
-exists, each site's status line omits the redundant connection label. The
-Redirects section holds Add redirect, Find redirects in Cloudflare, and the
-redirect table, showing each redirect's independent Mail role and keeping
-redirects out of the site table's selection, filters, and sort. On a phone each
-redirect card leads with source and target, DNS status, and the Mail role with
-Edit and Details beside it, cutting past ten rows behind a Show all button. A
-site's Details dialog leads with its status chip, problems, any pending
-nameservers with per-nameserver copy buttons, pending changes, and descriptive
-facts including its HTTP role and Mail role.
+and bulk assignment can update HTTP, Mail, or both independently. DNS-only domains
+are rows of the same table, typed DNS-only domain; **Add domain** beside the
+card's title adds one, and its Details dialog removes it, since a second button
+in the row would not fit the table. A row whose domain is a redirect's source,
+or a host that redirect answers for, carries a "Redirected in Redirects" badge
+linking to the Redirects addon; it is a warning only, and the row is planned as
+usual. Sites has the shared search from six sites, filters for needs attention,
+changes waiting, not managed, redirected, and site runtime, sorting on every
+heading, and desktop bulk controls that stay hidden until at least one row is
+ticked. When only one DNS connection exists, each site's status line omits the
+redundant connection label. A site's Details dialog leads
+with its status chip, problems, any pending nameservers with per-nameserver copy
+buttons, pending changes, and descriptive facts including its HTTP role and Mail
+role.
 
 The Profiles section splits into HTTP profiles and Mail profiles cards, each
 with its own default selector for new sites. The Mailcow section holds a
@@ -279,111 +276,60 @@ Firewall's Cloudflare edge state, and kept ahead of DNS repair by skipping DNS's
 repair hook in `cli/repair.ts` whenever startup migration fails while legacy DNS
 state is still pending.
 
-## Redirect domains
+## DNS-only domains
 
-A redirect domain is a source host, a target URL, a status (301, 302, 307 or
-308), keep path and keep query string, and optionally a Mail profile
-(`mailProfileId`). The source is a zone's apex, which covers its `www` too, or
-one host in a zone that holds other things; `www` is added only to an apex. A
-redirect domain is planned beside the sites, through the same switch, reviews,
-log and lock, but listed in a Redirects card of its own, where its Mail role is
-chosen in Edit. It cannot be a CloudPanel site: adding one for a site's domain
-is refused, and a site created later at a redirect's domain stops the redirect
-with a problem.
+An administrator can add a domain with no CloudPanel site behind it, such as a
+redirect's source that still receives mail, and give it a Mail role and,
+optionally, an HTTP profile. The policy's `domains` list holds them (at most
+`MAX_DOMAINS`, 500); their roles live in `assignments` as a site's do, and each
+is planned beside the sites through the same switch, reviews, log and lock.
+`add-domain` and `remove-domain` are admin-only verbs. Adding refuses a
+CloudPanel site (a stand-in left out included), a domain already listed and the
+panel hostname; the panel hostname refuses a listed domain. Removing refuses a
+domain CloudPanel now has a site at, so the site keeps the roles it takes over.
 
-On Cloudflare it is one Single Redirect rule in the zone's
-`http_request_dynamic_redirect` entrypoint, with a `ref` of
-`clp_dns_redirect_` and a hash of the source, and a proxied `AAAA 100::` at each
-host it answers for. With keep path the target is
-`concat("<target>", http.request.uri.path)`, so a target that keeps the path
-may have no query string and loses a trailing slash; without it, a static URL.
-There is no ACME exclusion, since the origin is never reached. The rule is
-written before the placeholders, so a placeholder never answers without it.
+`adoptNewSites` never prunes a listed domain. A site that appears at one takes
+it over: the domain leaves the list, keeps its roles, and takes the default HTTP
+profile if it has none. Removing a domain keeps its records in the zone, listed
+with the records of deleted sites for Remove or Keep. An administrator's
+**Apply now** on one runs `provision` for it; a non-administrator, or a request
+for a certificate, still needs a site.
 
-Its Mail profile's non-web rows apply, so mail and its DKIM key follow the Mail
-role as they do for a site. Any web row (an A, AAAA or CNAME row whose rendered
-name is the source, its `www` or its `*.`) is still left out so the placeholder
-always owns the redirect's HTTP hosts. The placeholder claims A and AAAA at each
-host, and so any CNAME there, which is what replaces the A and AAAA records a
-site or Terraform left. A missing zone is created the same way as for a site.
+## Redirects' domains and stand-ins
 
-A rule another tool wrote is taken over in place. Matching by `ref`, or by an
-equivalent rule as `ruleState` does for zone rules, would add a second rule
-beside one that differs, as Terraform's do (they skip Let's Encrypt's path, and
-some append the path to a target that is one page). So the redirect's rule is
-the rule with its `ref`, or any rule whose expression quotes one of its hosts.
-One such rule that tests only whole hosts (`http.host eq`, `==` or `in`, with
-Let's Encrypt's path optionally left out), all of them the redirect's, is
-updated in place with our `ref`. Anything else -- two rules, or one that names a
-host another way -- is a problem on the plan, to be fixed in Cloudflare. A rule
-is found by its hosts on every check, so it is kept whether or not Cloudflare
-keeps the `ref` an update sets; should Cloudflare refuse to change a rule's
-`ref`, the update is made again with the rule's own.
+DNS reads Redirects' saved state through `lib/redirect-domains.ts`, without
+importing the addon and whether or not Redirects is enabled, for two things:
 
-**Find redirects in Cloudflare** reads the redirect entrypoint of every zone
-the connections reach and lists the rules that redirect one whole host,
-or an apex and its `www`, to a fixed URL or one with the path appended, which
-no redirect domain or site has. Each fills a redirect's source, target, status,
-keep path and keep query string, and a selection is added in one change, which
-once Automatic is one review.
+- **The warning.** Each redirect's source and the hosts it answers for (its
+  stand-in's hosts, or the source and, at a registrable domain, its `www`) mark
+  the rows they cover. DNS plans those rows as usual.
+- **Stand-ins at the edge.** A stand-in is a blank static CloudPanel site, so
+  DNS treats it as any other site. When it is created it takes the default HTTP
+  role but not the default Mail role, so a redirect never gains mail records or
+  a Mailcow domain unless an administrator gives it a Mail role.
+  While Redirects serves the stand-in's redirect at Cloudflare's edge, such as
+  during a held move there, DNS leaves the stand-in out so it never writes over
+  the `AAAA 100::` placeholders. "At the edge" is read from Redirects'
+  `status.json`: the redirect's last plan has a zone, or a rule is still
+  tracked for it (`readEdgeSources`). A stand-in left out keeps its roles and
+  its known site id for when it serves locally again, and its tracked records
+  are not offered for removal. When `status.json` cannot be trusted or read,
+  every stand-in is left out; when the stand-in records cannot, every site at
+  a source served at the edge is. Other addons keep leaving every stand-in out
+  through `standInDomains` in `lib/stand-ins.ts`.
 
-Deleting a redirect domain while DNS asks first stops managing it. Once
-Automatic, a connected Cloudflare is checked for a rule even while a stand-in
-still serves the domain. A rule is deleted through a review; its records stay,
-for a site's profile to replace. A stand-in stays until that deletion is
-confirmed. A rule conflict blocks both deletions, and so does a rule that
-cannot be looked for: a connection that fails, or a zone reached through more
-than one connection with none chosen, could hide one.
-
-### Stand-in sites
-
-With no Cloudflare connection, nothing in Cloudflare is DNS's, so a redirect is
-served from this server: a CloudPanel static site whose vhost returns the
-redirect for the source and, for a registrable domain, its `www`, and serves
-`/.well-known/acme-challenge/` from the site's root; a target with a query
-string gets the request's after `&`. The body is written to the
-panel database as well as nginx (`lib/site-vhost.ts`), since CloudPanel renders
-the file again from it, as it does when a certificate is installed. Each
-reconcile pass asks Let's Encrypt, through `clpctl`, for a stand-in still on
-its self-signed certificate: at the first pass after it is created, then 15
-minutes, an hour and six hours after a failed attempt, and daily from then on,
-since the domain may be pointed here at any time. A stand-in is a write
-like any other: it waits for Automatic, is logged, and a profile assigned to it
-waits for a connection.
-
-`standins.json` records each one with its site user before CloudPanel creates
-it, so the new-site work of every addon already sees it, and adds CloudPanel's
-site id once the site exists. The user ends in eight random hex digits, which
-no one picks in the panel, so a site with it is the stand-in's even before its
-id is recorded: a failed creation deletes only a site with that user, and one
-interrupted before the id was saved takes the id from that site on the next
-pass. A record counts only while the panel site at its
-domain has that user and id, or that user for the few minutes it is being
-created (`lib/stand-ins.ts`): a site added there after the stand-in was deleted
-in CloudPanel is an ordinary site. DNS otherwise changes or deletes only a site
-whose id it recorded, and makes no stand-in where a site
-already exists. If creation fails and CloudPanel also refuses to delete the
-site, DNS keeps its ownership record so a later deletion can still identify
-the site, and reports both failures. The record stays marked incomplete until
-the vhost is written, so a later pass writes it rather than taking a static
-site that does not redirect for a working stand-in.
-DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
-Maintenance, SMTP Relay and Firewall through `withoutStandIns` in
-`lib/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
-pages read leaves them out too. Resource Limits and WordPress Tools never list a
-static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
-stand-in as it does every vhost.
-
-Adding a connection holds every redirect a stand-in serves, and removing the
-last one holds every redirect: its whole plan waits until it is reviewed, like
-a held new site, so a move between Cloudflare and this server is seen first. Once its rule and records are in and its zone is active, the
-stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
-once unless a Cloudflare rule needs a review first; then confirming the review
-deletes both.
+Upgrading turns each redirect that had a mail profile into a DNS-only domain
+with that Mail role, through DNS's own `upgradeSavedPolicy` (which the Redirects
+migration is handed so it never imports DNS); v2 leftovers with a
+`mailProfileId` are read the same way, and a policy whose leftovers would
+take the DNS-only domains past `MAX_DOMAINS` fails to read rather than drop
+one. Until that migration has run, a DNS save keeps `redirects` in
+`policy.json` for it to read, without the Mail roles the save already holds,
+so each is imported once.
 
 ## Panel hostname
 
-The panel hostname is a third kind of entry beside sites and redirect domains,
+The panel hostname is a third kind of entry beside sites and DNS-only domains,
 planned through the same switch, reviews, log and lock, with a fixed profile:
 A and AAAA at the name and no mail. Saving a panel hostname requires at least
 one DNS connection, and `list` also exposes CloudPanel's existing custom domain
@@ -397,7 +343,7 @@ lowercase label starting with a letter from `a-z` and continuing with `a-z` and
 while keeping the field editable. Let's Encrypt publishes issued leaf
 certificate names in public Certificate Transparency logs, so a random label
 avoids obvious guessing while Firewall's Panel gate is what blocks access if the
-name is found via CT logs. It cannot be a site's or a redirect's name; one
+name is found via CT logs. It cannot be a site's name; one
 created later at it stops it with a problem. It asks for no certificate, since
 CloudPanel issues the custom domain's own, and its records are tracked like a
 site's, so removing it lists them with the records of deleted sites.
@@ -419,7 +365,7 @@ only when they differ, so a renewal costs two file reads; the scheduled check
 covers anything it missed. CloudPanel writes `/etc/.clp_custom_domain` a moment
 after the certificate, and the watcher's second pass three seconds later finds
 it. The state is recorded only once Cloudflare holds the plan, so a write that
-failed is tried again, and a site or redirect domain with the name keeps the
+failed is tried again, and a site with the name keeps the
 watcher from waiting on DNS's lock. Under Ask first nothing is written.
 
 ### Custom Domain helper on Admin Settings
@@ -457,21 +403,22 @@ once, bypassing its own submit listener.
 
 ## Cloudflare connections
 
-Cloudflare connections are shared across DNS and Firewall in the root-owned
+Cloudflare connections are shared across DNS, Redirects, and Firewall in the root-owned
 `/var/lib/clp-addons/cloudflare/` store (`lib/cloudflare/store.ts`), managed by
-the manager's `/addons/api/cloudflare` routes as well as DNS's Settings tab.
-Both addons use the same Connect Cloudflare dialog
+the manager's `/addons/api/cloudflare` routes as well as DNS's, Redirects', and
+Firewall's settings.
+Those addons use the same Connect Cloudflare dialog
 (`lib/cloudflare/connect-dialog.ts`), where the operator selects scopes for DNS
-records, Cloudflare edge defaults, Panel gate, or any combination, and the
-template link updates live.
+records, redirect domains, Cloudflare edge defaults, Panel gate, or any
+combination, and the template link updates live.
 
 A connection is one API token. The dialog links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
 screen and never types an account ID. For DNS records the permissions are DNS
-Edit, Zone Edit, Account Settings Read, Single Redirect Edit and API Tokens
-Read. Single Redirect Edit is included before any redirect domain exists so
-finding redirects to take over works with the first token. API Tokens Read lets
+Edit, Zone Edit, Account Settings Read and API Tokens Read. Selecting redirect
+domains adds Single Redirect Edit, with DNS Edit and Zone Read when DNS records
+is unchecked. API Tokens Read lets
 the token read its own permissions; it exposes token metadata, never a secret.
 Zone Edit is included for Automatic zone creation; Cloudflare refuses a zone
 create without it by naming `account.zone.create`, which the page reports as
@@ -494,8 +441,9 @@ a refused settings or rules read or write is reported with the permission it nee
 
 `lib/cloudflare/tokens.ts` is the single list of permissions: each entry records
 its dashboard label, template key, API permission group names, scope, consumer
-(`dns`, `edge`, `panelGate`, or `shared`), and what uses it. The token template,
-refusal messages, and permission tables in DNS and Firewall all derive from it.
+(`dns`, `redirects`, `edge`, `panelGate`, or `shared`), and what uses it. The
+token template, refusal messages, and permission tables in DNS, Redirects and
+Firewall all derive from it.
 
 ### What a token holds
 
@@ -545,8 +493,9 @@ grants of permission group names over resources, and decided locally:
 A permission can be optional: nothing in the profiles requires it, and
 `enables` says what it would turn on. It is listed after the required ones,
 never as missing, and left out of the template; its row reads "Not added" until
-the token holds it, or "—" when the token cannot read itself. None is optional
-yet; Firewall's login jails and panel gate add theirs when they use them.
+the token holds it, or "—" when the token cannot read itself. Redirects'
+Single Redirect permission and Firewall's Panel gate permissions appear as
+optional in DNS's permission table.
 
 `connectionPermissions(stored, profiles, options)` in `lib/cloudflare/access.ts`
 gives the Setup checklist, from a connection's entry in
@@ -634,13 +583,10 @@ removing a DNS connection, with no review: nothing is written anywhere.
 Domains whose Mail role sets up Mailcow stay assigned to that Mail profile so
 nothing is discarded silently: the Mailcow tab shows a warning badge with the
 affected count and lists the affected domains inside the Connect Mailcow card,
-each affected site and redirect displays a "Mailcow unlinked" warning badge,
+each affected site and DNS-only domain displays a "Mailcow unlinked" warning badge,
 Setup's Action needed raises a Mailcow item pointing to `#mailcow`, and each
 affected plan reports a problem so records and Mailcow domains stay untouched
-until Mailcow is reconnected or the domain's Mail role changes. When a
-CloudPanel site and a redirect share a domain, `mailcowSites`, `mailcowActions`,
-and profile domain counts follow the same redirect-first rule as `DnsRun` while
-leaving the stored site assignment intact if the redirect is later deleted.
+until Mailcow is reconnected or the domain's Mail role changes.
 
 ## New sites and certificates
 
@@ -747,15 +693,13 @@ refused if it still disagrees.
 
 ## Change log
 
-Every write DNS makes to Cloudflare, Mailcow or a stand-in site -- a zone
-created, a record created, updated or deleted, a redirect rule, a Mailcow
-domain, DKIM key or sender list, a stand-in site -- is
+Every write DNS makes to Cloudflare, PowerDNS or Mailcow -- a zone created, a
+record created, updated or deleted, a Mailcow domain, DKIM key or sender list -- is
 logged once it succeeds, with the time, the sites it was
 for, the zone, what it was before where that is known, and what made it: a
-scheduled check, Check now, a new site, a confirmed review, Remove records or a
-deleted redirect.
+scheduled check, Check now, a new site, a confirmed review, or Remove records.
 Each run collects its writes and they are saved before the page's reply and
-again when the action ends, so writes made before a failure are kept. The log is the newest thousand writes; once Cloudflare is connected, the
+again when the action ends, so writes made before a failure are kept. The log is the newest thousand writes; once a DNS provider is connected, the
 Activity section shows the newest ten and puts the rest of the first two
 hundred under a disclosure. With nothing logged, Activity still shows its empty
 state and explains when Ask first is why. Provider errors are not logged: they
@@ -768,7 +712,7 @@ repeat every check and are already on the site's plan.
 reports (`status.json`). `/var/lib/clp-addons/dns/` holds `policy.json`
 (including PowerDNS connection settings), `secrets.json` (PowerDNS API keys and
 the Mailcow API key), the last check, tracked records, a pending review,
-automatic SSL requests, the stand-in sites, and the change log. Each file is
+automatic SSL requests, and the change log. Each file is
 root-owned, mode `0600`, replaced atomically, and refused if it is not a
 root-owned regular file of that mode. Tokens, PowerDNS API keys, and the
 Mailcow key are read only by root actions and travel only in request headers,

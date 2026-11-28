@@ -39,22 +39,24 @@ test("every declared injection target is represented in the watch paths", () => 
 });
 
 test("every addon with privileged verbs declares them", () => {
-  for (const name of ["firewall", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
+  for (const name of ["firewall", "dns", "redirects", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as
   // root; the absence is the declaration.
 });
 
-test("new-site work runs DNS before SMTP Relay", () => {
+test("new-site work runs Redirects before DNS, and DNS before SMTP Relay", () => {
   const order = ADDON_NAMES.filter((name) => ADDONS[name]!.newSites);
+  expect(order).toContain("redirects");
   expect(order).toContain("dns");
   expect(order).toContain("smtp");
+  expect(order.indexOf("redirects")).toBeLessThan(order.indexOf("dns"));
   expect(order.indexOf("dns")).toBeLessThan(order.indexOf("smtp"));
 });
 
 test("server and panel addons appear before site tools in catalog order", () => {
-  const foundational = ["system-tweaks", "firewall", "dns", "security-keys", "panel-tweaks", "resource-limits", "smtp"];
+  const foundational = ["system-tweaks", "firewall", "redirects", "dns", "security-keys", "panel-tweaks", "resource-limits", "smtp"];
   const siteTools = ["wp-tools", "stager", "maintenance", "git", "instatic", "terminal"];
   expect(ADDON_NAMES.slice(0, foundational.length)).toEqual(foundational);
   expect(ADDON_NAMES.slice(foundational.length)).toEqual(siteTools);

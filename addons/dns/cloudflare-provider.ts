@@ -13,7 +13,6 @@ import type {
 
 export const CLOUDFLARE_CAPABILITIES: ProviderCapabilities = {
   proxy: true,
-  edgeRedirects: true,
   createZone: true,
   autoTtl: true,
   comments: true,

@@ -505,7 +505,7 @@ function issuerNames(row: PanelSiteRow): { issuer?: string } {
 }
 
 function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
-  // DNS's stand-ins are static sites that only serve a redirect.
+  // Redirects' stand-ins are static sites that only serve a redirect.
   const standIns = standInDomains();
   return rows.map((row) => ({
     domain: row.domain_name,

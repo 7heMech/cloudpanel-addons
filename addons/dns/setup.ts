@@ -114,15 +114,11 @@ export function mailcowActions(state: DnsSetupState): ActionNeeded[] {
   if (linked) return [];
   const mailcowIds = new Set(state.policy.profiles.filter((profile) => profile.role === "mail" && profile.mailcow).map((profile) => profile.id));
   if (!mailcowIds.size) return [];
-  const redirectSources = new Set(state.policy.redirects.map((redirect) => redirect.source));
-  const affected = [
-    ...Object.entries(state.policy.assignments)
-      .filter(([domain, assigned]) => !redirectSources.has(domain) && assigned.mail && mailcowIds.has(assigned.mail))
-      .map(([domain]) => domain),
-    ...state.policy.redirects
-      .filter((redirect) => redirect.mailProfileId && mailcowIds.has(redirect.mailProfileId))
-      .map((redirect) => redirect.source),
-  ].sort();
+  // Sites and DNS-only domains alike keep their Mail role in assignments.
+  const affected = Object.entries(state.policy.assignments)
+    .filter(([, assigned]) => assigned.mail && mailcowIds.has(assigned.mail))
+    .map(([domain]) => domain)
+    .sort();
   if (!affected.length) return [];
   return [{
     title: "Mailcow is not connected",

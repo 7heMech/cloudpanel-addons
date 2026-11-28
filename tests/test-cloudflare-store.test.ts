@@ -136,6 +136,15 @@ test("tokenTemplates separates DNS, Cloudflare edge, Panel gate, and combined sc
 
   // Direct tokenTemplate with Panel gate required matches templates.panelGate.
   expect(tokenTemplate(DEFAULT_EDGE_DEFAULTS, { dns: false, edge: false, panelGate: true })).toEqual(templates.panelGate);
+  expect(templates.redirects.permissions).toContain("DNS: Edit");
+  expect(templates.redirects.permissions).toContain("Single Redirect: Edit");
+  expect(templates.redirects.permissions).toContain("Zone: Read");
+  expect(templates.redirects.permissions).not.toContain("SSL and Certificates: Edit");
+  expect(templates["dns+redirects"].permissions).toContain("Single Redirect: Edit");
+  expect(templates["dns+redirects"].permissions).toContain("Zone: Edit");
+  expect(templates["dns+redirects+edge+panelGate"].permissions).toContain("Single Redirect: Edit");
+  expect(templates["dns+redirects+edge+panelGate"].permissions).toContain("SSL and Certificates: Edit");
+  expect(tokenTemplate(DEFAULT_EDGE_DEFAULTS, { dns: false, redirects: true })).toEqual(templates.redirects);
 });
 
 test("cloudflareTokenHolds answers from the stored read without network calls", async () => {

@@ -4,6 +4,7 @@ import { GIT_VERBS } from "../addons/git/verbs";
 import { INSTATIC_VERBS } from "../addons/instatic/verbs";
 import { MAINTENANCE_VERBS } from "../addons/maintenance/verbs";
 import { PANEL_TWEAKS_VERBS } from "../addons/panel-tweaks/verbs";
+import { REDIRECTS_VERBS } from "../addons/redirects/verbs";
 import { RESOURCE_LIMITS_VERBS } from "../addons/resource-limits/verbs";
 import { SECURITY_KEYS_VERBS } from "../addons/security-keys/verbs";
 import { SMTP_VERBS } from "../addons/smtp/verbs";
@@ -54,6 +55,7 @@ export const ADDON_VERBS = {
   maintenance: MAINTENANCE_VERBS,
   manager: MANAGER_VERBS,
   "panel-tweaks": PANEL_TWEAKS_VERBS,
+  redirects: REDIRECTS_VERBS,
   "resource-limits": RESOURCE_LIMITS_VERBS,
   "security-keys": SECURITY_KEYS_VERBS,
   smtp: SMTP_VERBS,

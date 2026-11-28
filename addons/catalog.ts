@@ -4,6 +4,7 @@ import { addonSupportsArch, type AddonDefinition, type AddonHandler, type AddonN
 import { compareSemver } from "../lib/semver";
 import { FIREWALL_ADDON } from "./firewall/addon";
 import { DNS_ADDON } from "./dns/addon";
+import { REDIRECTS_ADDON } from "./redirects/addon";
 import { GIT_ADDON } from "./git/addon";
 import { INSTATIC_ADDON } from "./instatic/addon";
 import { MAINTENANCE_ADDON } from "./maintenance/addon";
@@ -18,12 +19,14 @@ import { SECURITY_KEYS_ADDON } from "./security-keys/addon";
 
 /**
  * Order is the order addons are listed and installed, and the order their
- * new-site work runs in: core server and security addons first, with DNS before
- * SMTP Relay. Keep it deliberate.
+ * new-site work runs in: core server and security addons first, with Redirects
+ * before DNS, so a site that replaces a redirect gets its DNS at once, and DNS
+ * before SMTP Relay. Keep it deliberate.
  */
 const DEFINITIONS: AddonDefinition[] = [
   SYSTEM_TWEAKS_ADDON,
   FIREWALL_ADDON,
+  REDIRECTS_ADDON,
   DNS_ADDON,
   SECURITY_KEYS_ADDON,
   PANEL_TWEAKS_ADDON,

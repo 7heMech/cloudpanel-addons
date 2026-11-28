@@ -33,8 +33,11 @@ import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addon
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../lib/cloudflare/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
-import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { mailcowSeededProfile as dnsMailcowProfile, presetsFor as dnsPresetsFor, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
+import { dashboardView as redirectsDashboardView, layout as redirectsLayout } from "../addons/redirects/app/views";
+import type { Found as RedirectsFound, RedirectsState, Review as RedirectsReview } from "../addons/redirects/action";
+import { appliedChangeCount, type RedirectPlan } from "../addons/redirects/engine";
+import { createSiteRedirectSnippet } from "../addons/redirects/inject/create-site";
 import { tokenTemplate as dnsTokenTemplate, tokenTemplates as cloudflareTokenTemplates } from "../lib/cloudflare/tokens";
 import {
   dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
@@ -138,8 +141,7 @@ function dnsPreviewState(url: URL): DnsState {
     domain, httpProfileId: "web", mailProfileId: null, mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
-  const redirect = (source: string, target: string, extra: Partial<DnsRedirect & { standIn: boolean }> = {}): DnsRedirect & { standIn: boolean } =>
-    ({ source, target, status: 301, keepPath: true, keepQuery: true, mailProfileId: null, standIn: false, ...extra });
+  const redirectedBy = (source: string, target: string) => ({ redirectedBy: { source, target } });
   const mailRole = mailcowUnlinked ? "google" : "mailcow";
   const mailMissing = mailcowRemoved ? { mailcowMissing: true as const } : {};
   const mailMissingProblems = mailcowRemoved ? ["Mailcow is not connected; connect Mailcow or change this domain's Mail role"] : [];
@@ -162,9 +164,8 @@ function dnsPreviewState(url: URL): DnsState {
   const sites: DnsState["sites"] = setup ? [
     { domain: "example.com", type: "wordpress", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
     { domain: "shop.example.com", type: "php", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
-    { domain: "old-name.example.org", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: null, ssl: null,
-      redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
-      plan: { ...plan("old-name.example.org", { httpProfileId: null, mailProfileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
+    { domain: "old-name.example.org", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null,
+      ...redirectedBy("old-name.example.org", "https://example.com") },
   ] : powerdnsOnly ? sortSites([
     { domain: "example.com", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: null, plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", httpRole: "site", httpProfileId: "web", mailProfileId: "google", plan: plan("shop.example.com", { mailProfileId: "google", changes: [
@@ -175,9 +176,9 @@ function dnsPreviewState(url: URL): DnsState {
       httpProfileId: null, mailProfileId: mailRole, zone: zone("example.org", "active", "powerdns"), problems: mailMissingProblems,
       changes: mailOrgChanges(true, false) }), ssl: null },
     { domain: "docs.example.com", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
-      redirect: redirect("example-brand.net", "https://example.com", { mailProfileId: mailRole, standIn: true }),
-      plan: { ...plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", "powerdns"), problems: mailMissingProblems, certificateNames: [] }), redirect: true as const } },
+    { domain: "example-brand.net", type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
+      ...redirectedBy("example-brand.net", "https://example.com"),
+      plan: plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", "powerdns"), problems: mailMissingProblems, certificateNames: [] }) },
   ]) : sortSites([
     { domain: "example.com", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: "google", plan: plan("example.com", { mailProfileId: "google", certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc", plan: plan("shop.example.com", { mailProfileId: "dmarc", changes: [
@@ -202,25 +203,20 @@ function dnsPreviewState(url: URL): DnsState {
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
     { domain: "docs.example.com", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
-      redirect: redirect("example-brand.net", "https://example.com", { mailProfileId: mailRole, standIn: mixedProviders }),
-      plan: { ...plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), problems: mailMissingProblems, certificateNames: [] }), redirect: true as const } },
-    { domain: "book.example.com", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: null, ssl: null,
-      redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition", { keepPath: false, status: 302 }),
-      plan: { ...plan("book.example.com", { httpProfileId: null, mailProfileId: null, certificateNames: [], changes: [
-        { action: "update", subject: "Cloudflare redirect rule", detail: "book.example.com: 302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the query string",
-          before: "302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the path and query string · except Let's Encrypt checks · another tool's rule, taken over in place" },
-        { action: "update", subject: "AAAA book.example.com", detail: "100:: · proxied", before: "2001:db8::10 · proxied" },
-        { action: "delete", subject: "A book.example.com", detail: "203.0.113.10 · proxied" },
-      ] }), redirect: true as const } },
+    { domain: "example-brand.net", type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
+      ...redirectedBy("example-brand.net", "https://example.com"),
+      plan: plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), problems: mailMissingProblems, certificateNames: [] }) },
+    { domain: "status.example.org", type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: "dmarc", ssl: null,
+      plan: plan("status.example.org", { httpProfileId: null, mailProfileId: "dmarc", zone: zone("example.org", "active", mixedProviders ? "powerdns" : "cloudflare"), certificateNames: [] }) },
+    { domain: "book.example.com", type: "static", httpRole: "site", httpProfileId: "web", mailProfileId: null, ssl: null,
+      ...redirectedBy("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
+      plan: plan("book.example.com", { certificateNames: ["book.example.com"] }) },
   ]);
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const log: DnsState["log"] = setup ? [] : powerdnsOnly ? [
     { at: at(3), cause: "New site", sites: ["example.com"], zone: "example.com", action: "create", subject: "PowerDNS zone",
       detail: "In Primary NS; nameservers ns1.example.net, ns2.example.net" },
     { at: at(3), cause: "New site", sites: ["example.com"], zone: "example.com", action: "create", subject: "A example.com", detail: "203.0.113.10 · TTL 300" },
-    { at: at(64), cause: "Scheduled check", sites: ["example-brand.net"], zone: "", action: "create", subject: "Stand-in site",
-      detail: "301 to https://example.com · keeps the path and query string" },
   ] : [
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "Cloudflare zone",
       detail: "In Example Agency; nameservers ada.ns.cloudflare.com, bob.ns.cloudflare.com" },
@@ -295,6 +291,7 @@ function dnsPreviewState(url: URL): DnsState {
     token: dnsTokenTemplate(previewEdgeDefaults, { dns: true }),
     tokens: cloudflareTokenTemplates(previewEdgeDefaults),
     firewallEnabled: true,
+    redirectsEnabled: true,
     presets: dnsPresetsFor(mailcowLinked),
     log,
     panelHost,
@@ -348,10 +345,13 @@ function dnsPreviewAccess(stored: Parameters<typeof dnsAccessView>[0], profiles:
   return { ...view, rows: [...view.rows, optional] };
 }
 
-const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
-const DNS_PREVIEW_FOUND = {
-  redirects: [dnsFoundRule("example-old.org", "https://example.com"), dnsFoundRule("example-press.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
-    dnsFoundRule("examplebooks.net", "https://example.com/books")],
+const redirectsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
+const REDIRECTS_PREVIEW_FOUND: RedirectsFound = {
+  redirects: [
+    redirectsFoundRule("example-old.org", "https://example.com"),
+    redirectsFoundRule("example-press.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
+    redirectsFoundRule("examplebooks.net", "https://example.com/books"),
+  ],
   notes: ["3 zones could not be read: Cloudflare: the token lacks Single Redirect: Edit for this zone; add it to the token in Cloudflare (Authentication error (10000))"],
 };
 
@@ -362,6 +362,192 @@ function dnsPreviewReview(state: DnsState): DnsReview {
     text: "8 changes will be made now. From then on DNS keeps every site's records to its profile, and creates a missing zone, on its own. Records at names a profile does not write are left alone.",
     sites, blocked: false, confirmLabel: "Apply and turn on Automatic", danger: true,
   };
+}
+
+/**
+ * Redirects preview state. ?setup shows the focused first-run card, ?ask shows
+ * Ask-first mode before Automatic, ?local omits Cloudflare connections, ?many
+ * passes the phone list cut.
+ */
+function redirectsPreviewState(url: URL): RedirectsState {
+  const setup = url.searchParams.has("setup");
+  const localOnly = !setup && url.searchParams.has("local");
+  const automatic = !setup && !url.searchParams.has("ask");
+  const mode = automatic ? "enforce" as const : "report" as const;
+  const cfZone = (name: string, status = "active") => ({
+    id: "0".repeat(32),
+    name,
+    status,
+    nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    account: "Example Agency",
+    connection: "Agency",
+    connectionId: "cf-1",
+  });
+  const plan = (domain: string, extra: Partial<RedirectPlan>): RedirectPlan => ({
+    domain, mode, zone: cfZone("example.com"), changes: [], problems: [], zoneChoices: [], ...extra,
+  });
+  const seeded = dnsSeededPolicy().profiles;
+  const connections: RedirectsState["connections"] = setup || localOnly ? [] : [
+    {
+      id: "cf-1", label: "Agency", active: true, status: "active",
+      accounts: [{ id: "a".repeat(32), name: "Example Agency" }], zones: 42, error: null, hasToken: true,
+      access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.agency }, DEFAULT_EDGE_DEFAULTS, { includeDns: false, requireRedirects: true }),
+    },
+    {
+      id: "cf-2", label: "Church", active: true, status: "active",
+      accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
+      access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.church }, DEFAULT_EDGE_DEFAULTS, { includeDns: false, requireRedirects: true }),
+    },
+  ];
+  const baseRedirects: RedirectsState["redirects"] = setup ? [] : localOnly ? [
+    {
+      source: "old-name.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: true,
+      plan: plan("old-name.example.org", { zone: null }),
+    },
+    {
+      source: "promo.example.net", target: "https://example.com/offer", status: 302, keepPath: false, keepQuery: true, mode: "local", standIn: true,
+      plan: plan("promo.example.net", { zone: null, changes: automatic ? [] : [
+        { action: "create", subject: "Stand-in site", detail: "302 to https://example.com/offer · keeps the query string" },
+      ] }),
+    },
+  ] : [
+    {
+      source: "example-brand.net", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: false,
+      plan: plan("example-brand.net", { zone: cfZone("example-brand.net") }),
+    },
+    {
+      source: "book.example.com", target: "https://shop.example.org/products/the-example-handbook-second-edition", status: 302, keepPath: false, keepQuery: true, mode: "auto", standIn: false,
+      plan: plan("book.example.com", {
+        zone: cfZone("example.com"),
+        changes: [
+          {
+            action: "update",
+            subject: "Cloudflare redirect rule",
+            detail: "book.example.com: 302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the query string",
+            before: "302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the path and query string · another tool's rule, taken over in place",
+          },
+          { action: "update", subject: "AAAA book.example.com", detail: "100:: · proxied", before: "2001:db8::10 · proxied" },
+          { action: "delete", subject: "A book.example.com", detail: "203.0.113.10 · proxied" },
+        ],
+      }),
+    },
+    {
+      source: "old-name.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "local", standIn: true,
+      plan: plan("old-name.example.org", { zone: null }),
+    },
+    {
+      source: "legacy.example.net", target: "https://example.com/archive", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: true,
+      plan: plan("legacy.example.net", {
+        zone: cfZone("legacy.example.net"),
+        held: true,
+        changes: [
+          { action: "create", subject: "Cloudflare redirect rule", detail: "legacy.example.net and www.legacy.example.net: 301 to https://example.com/archive · keeps the path and query string", waits: true },
+          { action: "create", subject: "AAAA legacy.example.net", detail: "100:: · proxied", waits: true },
+          { action: "delete", subject: "Stand-in site", detail: "Cloudflare answers this redirect now", waits: true },
+        ],
+      }),
+    },
+    {
+      source: "promo.example.co.uk", target: "https://example.com/offer", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: false,
+      plan: plan("promo.example.co.uk", { zone: cfZone("example.co.uk", "pending") }),
+    },
+    {
+      source: "newsite.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: false,
+      plan: plan("newsite.example.org", {
+        zone: cfZone("example.org"),
+        replacedBy: "newsite.example.org",
+        changes: [
+          { action: "delete", subject: "Cloudflare redirect rule", detail: "301 to concat(\"https://example.com\", http.request.uri.path)" },
+          { action: "delete", subject: "AAAA newsite.example.org", detail: "100:: · proxied" },
+        ],
+      }),
+    },
+    {
+      source: "conflict.example.net", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: false,
+      plan: plan("conflict.example.net", {
+        zone: null,
+        problems: ["example.net is reachable through more than one connection; choose which one manages it"],
+        zoneChoices: [
+          { zone: "example.net", connectionId: "cf-1", zoneId: "1".repeat(32), label: "Agency · Example Agency (active)" },
+          { zone: "example.net", connectionId: "cf-2", zoneId: "2".repeat(32), label: "Church · Church account (active)" },
+        ],
+      }),
+    },
+  ];
+  const redirects = url.searchParams.has("many")
+    ? [
+        ...baseRedirects,
+        ...Array.from({ length: 8 }, (_, n) => ({
+          source: `campaign-${n + 1}.example.org`, target: "https://example.com/campaigns", status: 301 as const,
+          keepPath: true, keepQuery: true, mode: "auto" as const, standIn: localOnly,
+          plan: plan(`campaign-${n + 1}.example.org`, { zone: localOnly ? null : cfZone("example.org") }),
+        })),
+      ]
+    : baseRedirects;
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const log: RedirectsState["log"] = setup ? [] : localOnly ? [
+    { at: at(18), cause: "Confirmed review", sites: ["old-name.example.org"], zone: "", action: "create", subject: "Stand-in site", detail: "301 to https://example.com · keeps the path and query string" },
+  ] : [
+    { at: at(6), cause: "Confirmed review", sites: ["example-brand.net"], zone: "example-brand.net", action: "create", subject: "Cloudflare redirect rule", detail: "example-brand.net and www.example-brand.net: 301 to https://example.com · keeps the path and query string" },
+    { at: at(6), cause: "Confirmed review", sites: ["example-brand.net"], zone: "example-brand.net", action: "create", subject: "AAAA example-brand.net", detail: "100:: · proxied" },
+    { at: at(92), cause: "Confirmed review", sites: ["old-name.example.org"], zone: "", action: "create", subject: "Stand-in site", detail: "301 to https://example.com · keeps the path and query string" },
+  ];
+  return {
+    automatic,
+    redirects,
+    connections,
+    zones: setup || localOnly ? [] : ["church.example", "example-brand.net", "example.com", "example.net", "example.org", "legacy.example.net"],
+    checkedAt: setup ? null : at(4),
+    waitUntil: 0,
+    tokens: cloudflareTokenTemplates(DEFAULT_EDGE_DEFAULTS),
+    serverIps: ["203.0.113.10", "2001:db8::10"],
+    dnsEnabled: true,
+    firewallEnabled: true,
+    log,
+  };
+}
+
+function redirectsPreviewReview(state: RedirectsState): RedirectsReview {
+  const sites = state.redirects.filter((entry) => entry.plan).map((entry) => ({ ...entry.plan!, problems: [], zoneChoices: [] }));
+  const changes = appliedChangeCount(sites);
+  return {
+    token: "preview",
+    title: "Turn on Automatic",
+    text: `${changes} change${changes === 1 ? "" : "s"} will be made now. From then on Redirects keeps every redirect domain in sync on its own. Non-web DNS records such as mail and verification are left alone.`,
+    sites,
+    blocked: false,
+    confirmLabel: "Apply and turn on Automatic",
+    danger: true,
+  };
+}
+
+const PREVIEW_CREATE_SITE_REDIRECTS = [
+  {
+    source: "old-name.example.org",
+    hosts: ["old-name.example.org", "www.old-name.example.org"],
+    target: "https://example.com",
+    status: 301,
+    mode: "local",
+    standIn: true,
+  },
+  {
+    source: "example-brand.net",
+    hosts: ["example-brand.net", "www.example-brand.net"],
+    target: "https://example.com",
+    status: 301,
+    mode: "auto",
+    standIn: false,
+  },
+];
+
+async function redirectsPreviewApi(req: Request, path: string): Promise<Response | null> {
+  if (path === "/addons/redirects/api/session" && req.method === "GET") {
+    return Response.json({ ok: true }, { headers: withCsrfCookie({}, "preview-token") });
+  }
+  if (path === "/addons/redirects/api/create-site-helper" && req.method === "GET") {
+    return Response.json({ ok: true, data: { redirects: PREVIEW_CREATE_SITE_REDIRECTS } });
+  }
+  return null;
 }
 
 /**
@@ -1371,8 +1557,10 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
   const term = url.searchParams.get("q");
   const search = term ? `<script>(function () { var input = document.getElementById("clp-wp-plugin-search"); input.value = ${JSON.stringify(term).replaceAll("<", "\\u003c")};
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); })();</script>` : "";
+  const prefillDomain = url.searchParams.get("redirect") ?? "";
+  const redirectBlock = manager ? "" : twigForRole(createSiteRedirectSnippet("/addons/redirects"), true);
   const field = (id: string, label: string, value: string, type = "text") => `<label for="site_new_word_press_${id}" class="col-form-label required">${label}</label>
-                  <input type="${type}" id="site_new_word_press_${id}" name="site_new_word_press[${id}]" required="required" class="form-control form-control-lg" value="${value}">`;
+                  <input type="${type}" id="site_new_word_press_${id}" name="site_new_word_press[${id}]" required="required" class="form-control form-control-lg" value="${Bun.escapeHTML(value)}">`;
   return panelPageStub("New WordPress Site", "", ["frontend/new-site.css"], `<main class="main-container"><div class="container-fluid container-limited-width new-site-container-fix">
   <div class="new-site-container">
     <div class="page-header"><div class="page-title"><h1>New WordPress Site</h1></div></div>
@@ -1383,7 +1571,7 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
           <div class="card-form">
             <div class="row">
               <div class="col-12">
-                ${field("domainName", "Domain Name", "")}
+                ${field("domainName", "Domain Name", prefillDomain)}
               </div>
             </div>
             <div class="pre-install-container">
@@ -1393,7 +1581,7 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
                 <div class="col-6">${field("adminPassword", "Admin Password", "preview-only-password")}</div>
               </div>
             </div>
-${seed}${manager && !wpNewSiteManagers ? "" : twigForRole(wpToolsNewSiteForm("/addons/wp-tools", wpNewSiteManagers), !manager)}${search}
+${seed}${manager && !wpNewSiteManagers ? "" : twigForRole(wpToolsNewSiteForm("/addons/wp-tools", wpNewSiteManagers), !manager)}${redirectBlock}${search}
             <div class="row">
               <div class="col-6 text-start">
                 <a href="/sites" class="btn btn-lg btn-gray">Back</a>
@@ -2416,6 +2604,8 @@ const server = Bun.serve({
     }
     const wpToolsApi = await wpToolsPreviewApi(req, path);
     if (wpToolsApi) return wpToolsApi;
+    const redirectsApi = await redirectsPreviewApi(req, path);
+    if (redirectsApi) return redirectsApi;
     const panelTweaksApi = panelTweaksPreviewApi(req, path);
     if (panelTweaksApi) return panelTweaksApi;
     const setupReply = await setupPreview(req, url);
@@ -2753,7 +2943,7 @@ const server = Bun.serve({
       html = resourceLimitsLayout("Resource Limits", resourceLimitsDashboardView(phpChanges ?? resourceLimitsPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|powerdns|mailcow|server
       // opens that dialog on load; ?ask shows DNS before Automatic is turned on;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of
       // something below the fold; ?dark draws the dark theme.
@@ -2775,13 +2965,27 @@ const server = Bun.serve({
         powerdns: "dnsEditConnection('', 'powerdns')",
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
-        redirect: "dnsEditRedirect('example-brand.net')",
-        "new-redirect": "dnsEditRedirect('')",
-        "redirect-site": "dnsShowSite('book.example.com')",
-        found: `dnsShowFound(${JSON.stringify(DNS_PREVIEW_FOUND)})`,
       };
       const opener = (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
       html = dnsLayout("DNS", dnsDashboardView(state), notice)
+        .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
+    } else if (path === "/addons/redirects/" || path === "/addons/redirects") {
+      // ?setup shows the first-run card, ?ask shows Ask-first mode, ?local omits
+      // Cloudflare connections, ?many passes the phone cut, and
+      // ?dialog=edit|new|detail|review|found|connect opens that dialog on load.
+      const state = redirectsPreviewState(url);
+      const dialog = url.searchParams.get("dialog");
+      const openers: Record<string, string> = {
+        edit: "redirEdit('example-brand.net')",
+        new: "redirEdit('')",
+        detail: "redirShowDetail('book.example.com')",
+        held: "redirShowDetail('legacy.example.net')",
+        review: `redirShowReview(${JSON.stringify(redirectsPreviewReview(state))})`,
+        found: `redirShowFound(${JSON.stringify(REDIRECTS_PREVIEW_FOUND)})`,
+        connect: "redirEditConnection('')",
+      };
+      const opener = dialog ? openers[dialog] ?? "" : "";
+      html = redirectsLayout("Redirects", redirectsDashboardView(state), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one), ?domains=<site> and ?test=<site> open a dialog on load, like ?confirm= does.

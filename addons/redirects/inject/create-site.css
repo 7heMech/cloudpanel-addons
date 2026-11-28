@@ -1,0 +1,17 @@
+/* Create Site redirect notice on CloudPanel's Create Site forms, in both light and html.dark themes. */
+.clp-redir-cs[hidden] { display: none; }
+.clp-redir-cs { margin: 8px 0 16px; }
+.clp-redir-cs-alert {
+  display: flex; flex-direction: column; gap: 6px; max-width: 100%; box-sizing: border-box;
+  margin-bottom: 0; font-size: 14px; line-height: 1.45;
+}
+.clp-redir-cs-lead { overflow-wrap: anywhere; }
+.clp-redir-cs-target { font-size: 13px; overflow-wrap: anywhere; color: inherit; background: rgba(0, 0, 0, .06); padding: 1px 5px; border-radius: 3px; }
+.clp-redir-cs-note { font-size: 13px; opacity: .9; }
+a.clp-redir-cs-link { text-decoration: underline; color: inherit; white-space: nowrap; }
+
+html.dark .clp-redir-cs-alert.alert-warning {
+  background: #332701; border-color: #664d03; color: #ffda6a;
+}
+html.dark .clp-redir-cs-target { background: rgba(255, 255, 255, .1); color: inherit; }
+html.dark a.clp-redir-cs-link { color: inherit; }

@@ -76,14 +76,12 @@ describe("the panel hostname", () => {
     expect(panelProfile(true).records.every((row) => row.proxied)).toBe(true);
   });
 
-  test("is planned beside the sites, and waits while a site or redirect domain has its name", () => {
+  test("is planned beside the sites, and waits while a site has its name", () => {
     const base = { secrets: { cloudflare: {}, mailcowKey: "" }, addresses: { ipv4: "203.0.113.10", ipv6: null }, backoff: { cloudflare: 0, mailcow: 0 } };
     const policy = { ...seededPolicy(), panelHost: "panel.example.com" };
     const entries = (sites: PanelSite[], extra = {}) => new DnsRun({ ...base, policy: { ...policy, ...extra }, sites }).entries.map((entry) => `${entry.type} ${entry.domain}`);
     expect(entries([site(1, "shop.example.com")])).toEqual(["php shop.example.com", "panel panel.example.com"]);
     expect(entries([site(1, "panel.example.com")])).toEqual(["php panel.example.com"]);
-    const redirect = { source: "panel.example.com", target: "https://example.com", status: 301 as const, keepPath: true, keepQuery: true, profileId: null };
-    expect(entries([], { redirects: [redirect] })).toEqual(["redirect panel.example.com"]);
   });
 
   test("is written unproxied, then proxied once CloudPanel serves an issued certificate for it", async () => {
@@ -132,12 +130,10 @@ describe("the panel hostname", () => {
     await expect(env.act("set-panel-host", { name: "panel.example.com" })).rejects.toThrow("Add a DNS connection first");
   });
 
-  test("is refused for a name a site or redirect domain has", async () => {
+  test("is refused for a name a site has", async () => {
     const env = setup();
     await env.act("save-connection", { token: TOKEN });
     await expect(env.act("set-panel-host", { name: "shop.example.com" })).rejects.toThrow("shop.example.com is a CloudPanel site");
-    await env.act("save-redirect", { source: "old.example.com", target: "https://example.com" });
-    await expect(env.act("set-panel-host", { name: "old.example.com" })).rejects.toThrow("old.example.com is a redirect domain");
   });
 
   test("shows a site that took its name later as a problem without repeating it or showing Next", async () => {
