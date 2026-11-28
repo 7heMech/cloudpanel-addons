@@ -322,11 +322,12 @@ describe("Redirects' domains in DNS", () => {
     expect(html).toContain('href="/addons/redirects/" title="old.example.org redirects to https://example.com">Redirected in Redirects</a>');
   });
 
-  test("a local stand-in is a site with the default roles; one served at the edge is left out, keeping its roles", async () => {
+  test("a local stand-in is a site with the default HTTP role; one served at the edge is left out, keeping its roles", async () => {
     const env = setup();
     env.cf.record("old.example.org", { type: "AAAA", name: "old.example.org", content: "100::", proxied: true, ttl: 1 });
     await env.connect();
-    await env.act("set-default", { httpProfileId: "web" });
+    // The default Mail role is for sites; a redirect's stand-in gets mail only when it is added in DNS.
+    await env.act("set-default", { httpProfileId: "web", mailProfileId: "dmarc" });
     await env.apply("set-automatic", { automatic: true });
 
     const standIn = site(50, "old.example.org", { type: "static", user: "stand-in-1a2b3c4d", createdAt: START });

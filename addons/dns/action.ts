@@ -937,6 +937,7 @@ class Action {
     const sites = this.sites();
     const domains = new Set(sites.map((site) => site.domain));
     const hidden = this.edgeStandIns();
+    const marks = readStandInMarks(this.paths.standInsFile, this.paths.rootUid) ?? {};
     const known = new Set(policy.knownSiteIds);
     const next = structuredClone(policy);
     for (const site of sites) {
@@ -944,8 +945,10 @@ class Action {
       if (known.has(site.id) && !listed) continue;
       next.domains = next.domains.filter((domain) => domain !== site.domain);
       const existing = next.assignments[site.domain] ?? (listed ? { http: null, mail: null } : null);
-      if (!existing && (next.defaultHttpProfileId || next.defaultMailProfileId)) {
-        next.assignments[site.domain] = { http: next.defaultHttpProfileId, mail: next.defaultMailProfileId };
+      // A redirect's stand-in takes the default HTTP role only; mail for it is added in DNS by hand.
+      const mail = isStandInSite(marks[site.domain], site, this.now) ? null : next.defaultMailProfileId;
+      if (!existing && (next.defaultHttpProfileId || mail)) {
+        next.assignments[site.domain] = { http: next.defaultHttpProfileId, mail };
       } else if (existing && !existing.http && next.defaultHttpProfileId) {
         next.assignments[site.domain] = { ...existing, http: next.defaultHttpProfileId };
       }

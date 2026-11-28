@@ -303,7 +303,9 @@ importing the addon and whether or not Redirects is enabled, for two things:
   stand-in's hosts, or the source and, at a registrable domain, its `www`) mark
   the rows they cover. DNS plans those rows as usual.
 - **Stand-ins at the edge.** A stand-in is a blank static CloudPanel site, so
-  DNS treats it as any other site, default roles included when it is created.
+  DNS treats it as any other site. When it is created it takes the default HTTP
+  role but not the default Mail role, so a redirect never gains mail records or
+  a Mailcow domain unless an administrator gives it a Mail role.
   While Redirects serves the stand-in's redirect at Cloudflare's edge, such as
   during a held move there, DNS leaves the stand-in out so it never writes over
   the `AAAA 100::` placeholders. "At the edge" is read from Redirects'
