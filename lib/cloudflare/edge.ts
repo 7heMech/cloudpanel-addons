@@ -585,6 +585,14 @@ export function planZoneEdge(defaults: EdgeDefaults, live: LiveZoneEdgeState): Z
       });
     } else if (foreign.length === 1 && exactForeignTarget(foreign[0]!, key)) {
       const existing = foreign[0]!;
+      const later = laterSslRules(rules, existing, key);
+      if (later.length > 0) {
+        const names = later.map((rule) => `“${ruleName(rule)}”`).join(", ");
+        conflicts.push(
+          `Conflicting Cloudflare rule${later.length > 1 ? "s" : ""} (${names}) overlap with ${spec.subject}; resolve ${later.length > 1 ? "them" : "it"} in Cloudflare first.`,
+        );
+        continue;
+      }
       const curIps = key === "skip" ? extractSkipIps(existing.expression) : null;
       const removed = curIps ? curIps.filter((ip) => !defaults.skipFirewallIps.includes(ip)) : [];
       changes.push({

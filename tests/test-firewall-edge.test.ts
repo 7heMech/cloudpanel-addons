@@ -291,6 +291,12 @@ describe("Cloudflare edge planner (lib/cloudflare/edge.ts)", () => {
       expect(plan([host("strict"), acme(ref)]).conflicts).toEqual([]);
       expect(plan([acme(ref), host("full")]).conflicts).toEqual([]);
     }
+    const flexible = { ...acme("dash_acme"), description: "Dashboard ACME", action_parameters: { ssl: "flexible" } };
+    const blocked = plan([flexible, host("flexible")]);
+    expect(blocked.changes).toEqual([]);
+    expect(blocked.conflicts).toHaveLength(1);
+    expect(blocked.conflicts[0]).toContain("Blog SSL");
+    expect(plan([flexible]).changes).toEqual([expect.objectContaining({ target: "acme", action: "update", conflict: true })]);
   });
 });
 

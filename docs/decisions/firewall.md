@@ -270,7 +270,8 @@ before accepting either a matching managed rule or an equivalent foreign rule,
 so an overlapping rule (such as a foreign ACME rule setting Flexible SSL beside
 Full SSL) holds the zone as a conflict instead of reporting it synced. Since
 every host serves the ACME path, any enabled rule after the ACME rule that sets
-another SSL mode, even one matching a single hostname, also competes with it;
+another SSL mode, even one matching a single hostname, also competes with it,
+including a lone foreign ACME rule Firewall would otherwise rewrite to Full;
 a new ACME rule is appended last, so earlier rules never compete. When
 applying a zone, rules are written before zone settings so the ACME Full SSL
 rule is in place before SSL switches to Full (strict). Zones are planned from
