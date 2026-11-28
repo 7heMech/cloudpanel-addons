@@ -20,6 +20,29 @@ test("provision scopes non-administrators to the authenticated account and retur
   expect(state).not.toHaveBeenCalled();
 });
 
+test("provision returns zoneCreated and nameservers for non-administrators without reading full state", async () => {
+  const created = {
+    managed: true,
+    ready: false,
+    reason: "Zone newsite.example was just created; set its nameservers at the registrar: ns1.example.net, ns2.example.net",
+    zone: "newsite.example",
+    nameServers: ["ns1.example.net", "ns2.example.net"],
+    provider: "powerdns" as const,
+    zoneCreated: true,
+    certificateNames: [],
+  };
+  const provision = spyOn(dnsService, "provision").mockResolvedValue({ ok: true, data: created });
+  const state = spyOn(dnsService, "state");
+  for (const role of ["ROLE_USER", "ROLE_SITE_MANAGER"]) {
+    const req = appRequest("/api/provision", "POST", { domain: "newsite.example", ssl: true });
+    const response = await handle(req, "/api/provision", undefined, undefined, { user: "bob", roles: [role] });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, data: created });
+    expect(provision).toHaveBeenLastCalledWith("newsite.example", { asUser: "bob", ssl: true });
+  }
+  expect(state).not.toHaveBeenCalled();
+});
+
 test("provision requires a session and the mutation guard before requesting root work", async () => {
   const provision = spyOn(dnsService, "provision");
   const req = () => appRequest("/api/provision", "POST", { domain: "example.com" });

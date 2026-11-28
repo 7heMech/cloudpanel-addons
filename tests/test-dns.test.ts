@@ -9,7 +9,7 @@ import { dnsTokenHolds, executeDnsAction, panelSites, type DnsReply, type Provis
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
 import type { PanelSite, SitePlan } from "../addons/dns/engine";
-import { MAX_ATTEMPTS, retryCertificates, type SslRequest } from "../addons/dns/ssl";
+import { MAX_ATTEMPTS, NEW_SITE_WINDOW, retryCertificates, type SslRequest } from "../addons/dns/ssl";
 import { dashboardContent } from "../addons/dns/app/views";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, policy, routed } from "./fixtures/dns-api";
 
@@ -46,9 +46,21 @@ function setup() {
   const addresses: Addresses = { ipv4: "203.0.113.10", ipv6: "2001:db8::10" };
   const env = {
     dir, cf, mc, agency, church, sites, issued, clock, addresses, latency,
+    setAutoSsl(addonEnabled: boolean, autoSsl: boolean, mode = 0o600): void {
+      const configPath = join(dir, "panel-tweaks.conf");
+      const tweaksPath = join(dir, "panel-tweaks.json");
+      if (addonEnabled) writeFileSync(configPath, "enabled");
+      else rmSync(configPath, { force: true });
+      writeFileSync(tweaksPath, JSON.stringify({ version: 1, autoSsl }), { mode });
+      chmodSync(tweaksPath, mode);
+    },
     async act<T = DnsReply>(verb: string, body?: unknown, args: string[] = []): Promise<T> {
       return await executeDnsAction([verb, ...args], {
-        paths: { configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), smtpConfig: join(dir, "smtp.json"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
+        paths: {
+          configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), smtpConfig: join(dir, "smtp.json"),
+          panelTweaksConfig: join(dir, "panel-tweaks.conf"), panelTweaksFile: join(dir, "panel-tweaks.json"),
+          lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false",
+        },
         processUid: 0,
         input: body === undefined ? undefined : JSON.stringify(body),
         fetch: async (address, init) => {
@@ -1061,6 +1073,127 @@ describe("automatic SSL", () => {
     await env.automatic();
     await env.act("provision", undefined, ["--domain=old.example.com", "--ssl"]);
     expect((await env.act("list")).sites.find((entry) => entry.domain === "old.example.com")!.ssl).toBeNull();
+  });
+
+  test("provision marks a brand-new Cloudflare zone with zoneCreated and clears it once Cloudflare activates the zone", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.automatic();
+    env.sites.push(site(9, "fresh-zone.example.org", { createdAt: env.clock.now, selfSigned: true }));
+
+    const created = await env.act<ProvisionReply>("provision", undefined, ["--domain=fresh-zone.example.org", "--ssl"]);
+    expect(created).toMatchObject({
+      managed: true,
+      ready: false,
+      zone: "example.org",
+      nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      provider: "cloudflare",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+
+    // A subsequent read of a pending zone that omits nameservers still returns the nameservers from the recent creation record.
+    env.cf.zones.find((z) => z.name === "example.org")!.name_servers = [];
+    const recovered = await env.act<ProvisionReply>("provision", undefined, ["--domain=fresh-zone.example.org"]);
+    expect(recovered).toMatchObject({
+      managed: true,
+      ready: false,
+      zone: "example.org",
+      nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      provider: "cloudflare",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+
+    // Once Cloudflare verifies delegation and marks the zone active, createdZones clears immediately.
+    env.cf.zones.find((z) => z.name === "example.org")!.status = "active";
+    const active = await env.act<ProvisionReply>("provision", undefined, ["--domain=fresh-zone.example.org"]);
+    expect(active).toEqual({
+      managed: true,
+      ready: true,
+      reason: "DNS is in place",
+      certificateNames: ["fresh-zone.example.org"],
+    });
+  });
+
+  test("sync-sites enqueues brand-new self-signed sites into ssl.json when Panel Tweaks automatic SSL is enabled", async () => {
+    const env = setup();
+    env.setAutoSsl(true, true);
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.automatic();
+
+    // Site created via clpctl or whose browser completion tab closed early (no provision() call).
+    env.sites.push(
+      site(10, "cli-site.example.com", { createdAt: env.clock.now - 30_000, selfSigned: true }),
+      site(11, "already-ssl.example.com", { createdAt: env.clock.now - 30_000, selfSigned: false }),
+      site(12, "too-old.example.com", { createdAt: env.clock.now - NEW_SITE_WINDOW - 60_000, selfSigned: true }),
+    );
+    const synced = await env.act<{ joined: string[] }>("sync-sites");
+    expect(synced.joined.sort()).toEqual(["already-ssl.example.com", "cli-site.example.com", "too-old.example.com"]);
+
+    const state = await env.act("list");
+    expect(state.sites.find((s) => s.domain === "cli-site.example.com")!.ssl).toBe("Waiting for the page that created the site");
+    expect(state.sites.find((s) => s.domain === "already-ssl.example.com")!.ssl).toBeNull();
+    expect(state.sites.find((s) => s.domain === "too-old.example.com")!.ssl).toBeNull();
+
+    const status = await env.act<SiteDnsStatus>("site-status", undefined, ["--domain=cli-site.example.com"]);
+    expect(status.certificate).toBe("automatic");
+
+    // Reconcile retries Let's Encrypt automatically after FIRST_DELAY and stops once installed.
+    env.clock.now += 3 * 60_000;
+    env.clock.issue = true;
+    await env.act("reconcile");
+    expect(env.issued).toEqual([{ domain: "cli-site.example.com", alternatives: [] }]);
+
+    // If reconcile adopts a brand-new site before sync-sites runs, it still enqueues it for retry after FIRST_DELAY.
+    env.sites.push(site(13, "raced.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("reconcile");
+    expect((await env.act("list")).sites.find((s) => s.domain === "raced.example.com")!.ssl).toBe("Waiting for the page that created the site");
+    expect(env.issued.some((entry) => entry.domain === "raced.example.com")).toBe(false);
+    env.clock.now += 3 * 60_000;
+    await env.act("reconcile");
+    expect(env.issued.some((entry) => entry.domain === "raced.example.com")).toBe(true);
+  });
+
+  test("sync-sites skips missed-SSL pickup when Panel Tweaks autoSsl is off, disabled, untrusted, or DNS is not Automatic", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.automatic();
+
+    // 1. Panel Tweaks enabled, autoSsl false.
+    env.setAutoSsl(true, false);
+    env.sites.push(site(20, "off.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((s) => s.domain === "off.example.com")!.ssl).toBeNull();
+
+    // 2. Panel Tweaks disabled (no panel-tweaks.conf), even though tweaks.json still says autoSsl: true.
+    env.setAutoSsl(false, true);
+    env.sites.push(site(21, "disabled.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((s) => s.domain === "disabled.example.com")!.ssl).toBeNull();
+
+    // 3. Untrusted tweaks.json (world-writable) is ignored without failing sync-sites.
+    env.setAutoSsl(true, true, 0o666);
+    env.sites.push(site(22, "untrusted.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((s) => s.domain === "untrusted.example.com")!.ssl).toBeNull();
+
+    // 4. DNS in Ask first mode does not enqueue automatic SSL even when autoSsl is on.
+    env.setAutoSsl(true, true, 0o600);
+    await env.act("set-automatic", { automatic: false });
+    env.sites.push(site(23, "ask-first.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((s) => s.domain === "ask-first.example.com")!.ssl).toBeNull();
+
+    // 5. DNS Automatic with no default profile leaves unassigned sites out of ssl.json.
+    await env.automatic();
+    await env.act("set-default", { profileId: null });
+    env.sites.push(site(24, "unassigned.example.com", { createdAt: env.clock.now, selfSigned: true }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((s) => s.domain === "unassigned.example.com")!.ssl).toBeNull();
   });
 });
 

@@ -235,21 +235,29 @@ Twig draws a status line there, in the shape of CloudPanel's flash messages, and
 the script forgets the domain before any request, so a refresh or Back never
 issues twice. When the DNS addon is installed, the script first asks it to
 write the new site's records (see [DNS](dns.md)). DNS answers with the names its
-records cover -- `www` only where it writes one -- or with why DNS is not ready
-yet, in which case no certificate is requested here and DNS retries as root
-later. The page says so with no link, as there is nothing to do on the SSL/TLS
-tab; a zone waiting for its nameservers gets DNS's own notice, the nameservers
-copyable. Without DNS, or for a site DNS does not manage, the certificate is for
-the created domain alone; the form's default `www` name needs DNS the operator
-may not have. DNS counts as absent only when its session route answers 404 or
-403; when it does not answer, or cannot write the records, nothing is requested
-and the domain is remembered again, so a refresh starts over. The script then
-fetches the native form and posts it for those names. CloudPanel redirects to
-the site's certificate list only on success; anything else shows the panel's
-own error with a link to the site's SSL/TLS tab. The page must stay open until
-it finishes. On Sites, the enhanced table then refetches its data and repaints
-that row's SSL cell. Panel Tweaks itself never retries and never scans existing
-sites.
+records cover (`www` only where it writes one), or with `ready: false` or
+`zoneCreated: true` when DNS is not ready yet or a brand-new zone was just
+created, including a PowerDNS Native zone whose API reports `active` before
+registrar delegation propagates. In either case no certificate is requested from
+the browser and DNS retries as root later. The page says so with no link, as
+there is nothing to do on the SSL/TLS tab; a pending or newly created zone gets
+DNS's own notice (`lib/nameserver-notice.ts`) with copyable nameservers and
+provider-appropriate wording, matching the Admin Settings Custom Domain helper,
+or a delegation warning if no nameservers were returned. Without DNS, or for a
+site DNS does not manage, the certificate is for the created domain alone; the
+form's default `www` name needs DNS the operator may not have. DNS counts as
+absent only when its session route answers 404 or 403; when it does not answer,
+or cannot write the records, nothing is requested and the domain is remembered
+again, so a refresh starts over. The script then fetches the native form and
+posts it for those names. CloudPanel redirects to the site's certificate list
+only on success; anything else shows the panel's own error with a link to the
+site's SSL/TLS tab. The page must stay open until browser issuance finishes. On
+Sites, the enhanced table then refetches its data and repaints that row's SSL
+cell. Panel Tweaks itself never retries and never scans existing sites; when DNS
+is also installed and Automatic, DNS's `sync-sites` pass picks up brand-new
+self-signed sites within fifteen minutes whenever `autoSsl` is enabled so sites
+created through `clpctl` or whose completion tab closed early still get
+automatic retries as root.
 
 ## Nothing moves once it is on the screen
 

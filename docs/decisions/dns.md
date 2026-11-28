@@ -601,7 +601,13 @@ were.
 DNS declares `newSites`, so the shared watcher (see
 [Platform integration](platform.md#new-sites)) gives a new site the default
 profile and, once DNS is Automatic, writes it, normally within seconds and before SMTP Relay, which
-waits at most fifteen seconds for it.
+waits at most fifteen seconds for it. When DNS is Automatic and Panel Tweaks is
+enabled with `autoSsl` turned on (checked from Panel Tweaks' enable flag and its
+root-owned `tweaks.json`, with missing or untrusted files treated as off),
+`sync-sites` and `check` also enqueue newly adopted self-signed sites created
+within `NEW_SITE_WINDOW` (fifteen minutes) into `ssl.json` via `requestSsl`.
+Sites created through `clpctl`, or whose browser completion tab closed early,
+still receive automatic Let's Encrypt retries once DNS is ready.
 
 Creating a site points its names at this server, so a new site's records at
 names with no published records yet, including a missing `*.{domain}` wildcard,
@@ -620,22 +626,36 @@ asks for a certificate. The route, and its CSRF session route, are reachable by
 non-administrators: the action is told the panel user and refuses a site
 `panelUserOwnsSite` does not give them, and answers with readiness, a reason (a
 fixed one when a non-administrator's site has a problem, since a plan's problems
-can name other sites and quote provider errors), a pending zone and its
-nameservers, and the certificate names only: the site and `www` where the
-profile writes an address there, or covers `www` through an unobstructed
-wildcard. A site in no profile, or any site while DNS asks first, is not DNS's to hold up.
-A non-administrator's call checks Cloudflare only for a site created in the last
-fifteen minutes; for an older one it answers from the last check, so repeating
-it cannot keep the DNS lock and the provider's rate limit busy.
+can name other sites and quote provider errors), a pending or newly created zone
+with its provider, nameservers, and `zoneCreated` flag, and the certificate
+names only: the site and `www` where the profile writes an address there, or
+covers `www` through an unobstructed wildcard. A site in no profile, or any site
+while DNS asks first, is not DNS's to hold up.
+A non-administrator's call checks the DNS provider only for a site created in
+the last fifteen minutes; for an older one it answers from the last check, so
+repeating it cannot keep the DNS lock and the provider's rate limit busy.
+When DNS creates a brand-new zone during `sync-sites` or `provision`, `record`
+stores its `connectionId:zoneId`, creation time, and nameservers in
+`status.json` for `NEW_SITE_WINDOW` (clearing a Cloudflare entry sooner once a
+later run sees that zone `active`). If `provision` creates the site's zone
+directly or sees a matching recent creation in `status.json`, including a
+PowerDNS Native zone whose API reports `status: "active"` immediately before
+registrar delegation propagates, `provision` answers with `ready: false`,
+`zoneCreated: true`, the zone name, its provider, and its nameservers so the
+completion page pauses immediate Let's Encrypt issuance. Later `reconcile`
+passes still evaluate `readiness(plan)` directly, so PowerDNS sites retry
+`clpctl lets-encrypt:install:certificate` automatically once the initial
+two-minute delay elapses.
 For a site DNS writes, created in the last fifteen minutes, that still has its
-self-signed certificate, the call also records that automatic SSL was asked
-for. When DNS was not ready -- a new zone waiting for its nameservers, say --
-the 15-minute check retries it as root with `clpctl
-lets-encrypt:install:certificate` once the site is ready: at the first check two
-minutes or more after the request, then at the first check 5, 15, 60 and 360
-minutes after each attempt, five attempts in all. The attempt is counted before the CLI
-runs. A site whose certificate is no longer the placeholder ends its request,
-so a real certificate is never replaced; a site DNS stops writing drops it.
+self-signed certificate, `provision` with `--ssl` also records that automatic
+SSL was asked for (idempotent with `sync-sites`). When DNS was not ready, or
+when immediate browser issuance paused for a new zone or never completed, the
+15-minute check retries it as root with `clpctl lets-encrypt:install:certificate`
+once the site is ready: at the first check two minutes or more after the
+request, then at the first check 5, 15, 60 and 360 minutes after each attempt,
+five attempts in all. The attempt is counted before the CLI runs. A site whose
+certificate is no longer the placeholder ends its request, so a real certificate
+is never replaced; a site DNS stops writing drops it.
 
 A site's SSL/TLS tab, the one the panel's certificate badges link to, carries a
 notice while its zone waits for nameservers, since that is what the certificate

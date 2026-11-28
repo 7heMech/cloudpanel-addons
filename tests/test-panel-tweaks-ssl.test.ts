@@ -241,3 +241,90 @@ test("DNS that does not answer asks for no certificate, and a refresh tries agai
   expect(failed.alert.textContent).toContain("Refresh this page to try again.");
   expect(failed.jar.domains()).toEqual([DOMAIN]);
 });
+
+test("a newly created PowerDNS zone pauses certificate issuance and shows copyable nameservers", async () => {
+  const nameServers = ["ns1.example.net", "ns2.example.net"];
+  // Pauses both when ready is false and when a provider reports active with zoneCreated: true.
+  for (const ready of [false, true]) {
+    const paused = run({
+      box: true,
+      dns: {
+        provision: {
+          ok: true,
+          data: {
+            managed: true,
+            ready,
+            zoneCreated: true,
+            provider: "powerdns",
+            zone: "example.com",
+            nameServers,
+            reason: "Zone example.com was just created",
+            certificateNames: ready ? [DOMAIN] : [],
+          },
+        },
+      },
+    });
+    await paused.settled();
+    expect(paused.calls).toEqual([]);
+    expect(paused.alert.className).toBe("alert alert-warning");
+    expect(paused.alert.parts.join("")).toBe(
+      "example.com is waiting for its nameservers. The Let\u2019s Encrypt certificate is requested automatically "
+      + "once delegation propagates. At the domain\u2019s registrar, set its nameservers to [ns1.example.net] and [ns2.example.net].",
+    );
+    expect(paused.alert.parts.join("")).not.toContain("Cloudflare");
+    expect(paused.alert.links).toEqual([]);
+  }
+});
+
+test("a newly created zone with no nameservers still pauses issuance with delegation guidance", async () => {
+  const paused = run({
+    box: true,
+    dns: {
+      provision: {
+        ok: true,
+        data: {
+          managed: true,
+          ready: false,
+          zoneCreated: true,
+          provider: "powerdns",
+          zone: "example.com",
+          reason: "Zone example.com was just created",
+          certificateNames: [],
+        },
+      },
+    },
+  });
+  await paused.settled();
+  expect(paused.calls).toEqual([]);
+  expect(paused.alert.className).toBe("alert alert-warning");
+  expect(paused.alert.textContent).toContain("new PowerDNS zone example.com was created");
+  expect(paused.alert.textContent).toContain("delegation propagates");
+  expect(paused.alert.links).toEqual([]);
+});
+
+test("a newly created Cloudflare zone pauses issuance and keeps Cloudflare nameserver wording", async () => {
+  const nameServers = ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
+  const paused = run({
+    box: true,
+    dns: {
+      provision: {
+        ok: true,
+        data: {
+          managed: true,
+          ready: false,
+          zoneCreated: true,
+          provider: "cloudflare",
+          zone: "example.com",
+          nameServers,
+          reason: "Zone example.com is pending",
+          certificateNames: [],
+        },
+      },
+    },
+  });
+  await paused.settled();
+  expect(paused.calls).toEqual([]);
+  expect(paused.alert.className).toBe("alert alert-warning");
+  expect(paused.alert.parts.join("")).toContain("once Cloudflare sees them");
+  expect(paused.alert.parts.join("")).toContain("[ada.ns.cloudflare.com] and [bob.ns.cloudflare.com]");
+});

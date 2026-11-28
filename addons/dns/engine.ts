@@ -205,7 +205,7 @@ interface ZoneState {
   error: string | null;
 }
 
-function zoneMapKey(connectionId: string, zoneId: string): string {
+export function zoneMapKey(connectionId: string, zoneId: string): string {
   return `${connectionId}:${zoneId}`;
 }
 
@@ -245,7 +245,7 @@ export class DnsRun {
   readonly log: LogEntry[] = [];
   private readonly zoneRefs: ZoneRef[] = [];
   private readonly zones = new Map<string, ZoneState>();
-  private readonly createdZoneKeys = new Set<string>();
+  private readonly createdZoneInfo = new Map<string, string[]>();
   private readonly mail = new Map<string, MailState | { error: string }>();
   private readonly acl = new Map<string, string[] | null | { error: string }>();
   private sourceDkim: MailcowDkim | null | { error: string } | undefined;
@@ -997,7 +997,12 @@ export class DnsRun {
   /** Whether this run created the zone that `domain` resolves to. */
   zoneCreatedFor(domain: string): boolean {
     const resolved = this.resolve(domain);
-    return resolved.kind === "zone" && this.createdZoneKeys.has(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id));
+    return resolved.kind === "zone" && this.createdZoneInfo.has(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id));
+  }
+
+  /** Newly created zones from this run, keyed by `connectionId:zoneId`, with their nameservers. */
+  newlyCreatedZones(): Map<string, string[]> {
+    return new Map(this.createdZoneInfo);
   }
 
   /**
@@ -1184,7 +1189,7 @@ export class DnsRun {
           `In ${accountName(createIn)}${zone.nameServers.length ? `; nameservers ${zone.nameServers.join(", ")}` : ""}`);
         const ref: ZoneRef = { zone, connectionId: createIn.connectionId, provider: provider.kind };
         const key = zoneMapKey(createIn.connectionId, zone.id);
-        this.createdZoneKeys.add(key);
+        this.createdZoneInfo.set(key, [...zone.nameServers]);
         this.zoneRefs.push(ref);
         this.profilesByZone = null;
         this.zones.set(key, { ref, records: null, settings: new Map(), rulesets: new Map(), error: null });
