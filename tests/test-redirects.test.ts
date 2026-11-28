@@ -836,6 +836,23 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect((await env.act("list")).redirects[0]!.plan!.held).toBe(true);
   });
 
+  test("turning on Automatic counts only the changes it applies, not those held for their own review", async () => {
+    const env = setup();
+    env.cf.zone("other.example", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("later.example", "https://example.com")));
+    await env.act("set-automatic", { automatic: false });
+
+    env.cf.zone("later.example", env.account);
+    await env.act("check");
+    const review = (await env.act("set-automatic", { automatic: true })).review!;
+    const held = review.sites.find((plan) => plan.domain === "later.example")!;
+    expect(held.changes.length).toBeGreaterThan(0);
+    expect(held.changes.every((change) => change.waits)).toBe(true);
+    expect(review.text).toStartWith("0 changes will be made now");
+  });
+
   test("holds a Cloudflare redirect for review before it falls back to a new stand-in", async () => {
     const env = setup();
     env.cf.zone("other.example", env.account);

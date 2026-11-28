@@ -33,7 +33,7 @@ import { panelUserUid } from "../../lib/sso-auth";
 import { isStandInSite } from "../../lib/stand-ins";
 import { trustedText } from "../../lib/trusted-file";
 import {
-  RedirectsRun, type LogEntry, type RedirectPlan, type Removal, type TrackedRedirectRule,
+  appliedChangeCount, RedirectsRun, type LogEntry, type RedirectPlan, type Removal, type TrackedRedirectRule,
 } from "./engine";
 import {
   cloudflareId, connectionId, emptyPolicy, hostname, parsePolicy, parseRedirect, parseRedirects,
@@ -689,7 +689,7 @@ class Action {
       domains,
       policy: next,
     });
-    const changes = plans.reduce((count, plan) => count + plan.changes.filter((change) => change.action !== "note").length, 0);
+    const changes = appliedChangeCount(plans);
     const turningOn = !before.automatic;
     return this.reply({
       notice,

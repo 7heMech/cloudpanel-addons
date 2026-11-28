@@ -71,6 +71,11 @@ export interface RedirectPlan {
   replacedBy?: string;
 }
 
+/** The changes confirming a review applies: notes and changes held for their own review are left out. */
+export function appliedChangeCount(plans: RedirectPlan[]): number {
+  return plans.reduce((count, plan) => count + plan.changes.filter((change) => change.action !== "note" && !change.waits).length, 0);
+}
+
 export interface TrackedRedirectRule {
   connectionId: string;
   zoneId: string;
