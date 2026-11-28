@@ -126,6 +126,13 @@ export interface Review {
 
 export type LogLine = LogEntry & { cause: string };
 
+/** What `sync-sites` did: removed now, waiting for Automatic, or kept by a problem its plan records. */
+export interface SyncSitesResult {
+  replaced: string[];
+  waiting: string[];
+  blocked: string[];
+}
+
 export interface Found {
   redirects: FoundRedirect[];
   notes: string[];
@@ -821,13 +828,14 @@ class Action {
 
   /**
    * Run when CloudPanel creates a site: a redirect the site replaces is removed
-   * now once Redirects is Automatic, and shown as waiting otherwise. Makes no
+   * now once Redirects is Automatic, waits for Automatic otherwise, and is kept
+   * while its plan has a problem. Makes no
    * Cloudflare call when no new site touches a redirect.
    */
-  async syncSites(): Promise<{ replaced: string[]; waiting: string[] }> {
+  async syncSites(): Promise<SyncSitesResult> {
     const policy = this.files.policy();
     const candidates = this.siteCandidates(policy);
-    if (!candidates.length) return { replaced: [], waiting: [] };
+    if (!candidates.length) return { replaced: [], waiting: [], blocked: [] };
     this.cause = "New site";
     const run = this.run(policy);
     await run.discover();
@@ -837,7 +845,8 @@ class Action {
     const replaced = [...run.replaced.keys()];
     this.forget(replaced);
     await this.record(run, run.planAll(candidates), candidates);
-    return { replaced, waiting: replacing.filter((source) => !run.replaced.has(source)) };
+    const left = replacing.filter((source) => !run.replaced.has(source));
+    return policy.automatic ? { replaced, waiting: [], blocked: left } : { replaced, waiting: left, blocked: [] };
   }
 
   async confirm(token: unknown): Promise<RedirectsReply> {
@@ -1008,7 +1017,7 @@ export async function executeRedirectsAction(argv: string[], options: RedirectsA
   if (verb === "list") return action.state();
   if (verb === "create-site-helper") return action.createSiteHelper();
   // A throwaway read: the locked run reads stand-ins afresh, after anything retired while it waited.
-  if (verb === "sync-sites" && (!existsSync(paths.configFile) || !new Action(paths, options).siteCandidates().length)) return { replaced: [], waiting: [] };
+  if (verb === "sync-sites" && (!existsSync(paths.configFile) || !new Action(paths, options).siteCandidates().length)) return { replaced: [], waiting: [], blocked: [] };
 
   const wait = verb === "reconcile" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "Redirects is busy checking Cloudflare; try again in a moment", async () => {

@@ -1,7 +1,7 @@
 import type { AddonDefinition } from "../../lib/addon-definition";
 import { tryRun } from "../../lib/command";
 import { queueAddonPass } from "../../lib/job-store";
-import { executeRedirectsAction, runRedirectsAction, type RedirectsActionOptions } from "./action";
+import { executeRedirectsAction, runRedirectsAction, type RedirectsActionOptions, type SyncSitesResult } from "./action";
 import { handle } from "./app/index";
 import { CREATE_SITE_TARGETS } from "./inject/create-site";
 import { REDIRECTS_ACTIONS } from "./setup";
@@ -24,10 +24,11 @@ export const REDIRECTS_ADDON: AddonDefinition = {
   newSites: {
     label: "Redirects",
     run: async (options) => {
-      const { replaced, waiting } = await executeRedirectsAction(["sync-sites"], (options ?? {}) as RedirectsActionOptions) as { replaced: string[]; waiting: string[] };
+      const { replaced, waiting, blocked } = await executeRedirectsAction(["sync-sites"], (options ?? {}) as RedirectsActionOptions) as SyncSitesResult;
       return [
         replaced.length ? `removed ${replaced.join(", ")}, replaced by new sites` : "",
         waiting.length ? `${waiting.join(", ")} replaced by new sites once Redirects is Automatic` : "",
+        blocked.length ? `${blocked.join(", ")} kept for now; see the problem in Redirects` : "",
       ].filter(Boolean).join("; ") || null;
     },
   },

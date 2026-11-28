@@ -1050,7 +1050,7 @@ describe("a CloudPanel site replaces a redirect", () => {
     env.sites.push({ id: 50, domain: "unrelated.example", user: "unrelated", selfSigned: false });
     env.sites.push({ id: 51, domain: "shop.quiet.example", user: "shop", selfSigned: false });
     const calls = env.cf.calls.length;
-    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: [] });
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: [], blocked: [] });
     expect(env.cf.calls.length).toBe(calls);
     expect(env.redirectRules("quiet.example")).toHaveLength(1);
   });
@@ -1081,7 +1081,7 @@ describe("a CloudPanel site replaces a redirect", () => {
     env.sites.push({ id: 61, domain: "second.example", user: "second", selfSigned: false });
     const adapters = [before, env.standIns];
     const synced = await executeRedirectsAction(["sync-sites"], { ...env.options(), standIns: () => adapters.shift() ?? env.standIns });
-    expect(synced).toEqual({ replaced: ["first.example", "second.example"], waiting: [] });
+    expect(synced).toEqual({ replaced: ["first.example", "second.example"], waiting: [], blocked: [] });
   });
 
   test("in Ask first, the removal waits as a pending change until Automatic is turned on", async () => {
@@ -1093,7 +1093,7 @@ describe("a CloudPanel site replaces a redirect", () => {
     await env.act("set-automatic", { automatic: false });
 
     env.sites.push({ id: 44, domain: "ask.example", user: "ask", selfSigned: false });
-    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: ["ask.example"] });
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: ["ask.example"], blocked: [] });
     await env.act("check");
     expect(env.redirectRules("ask.example")).toHaveLength(1);
     const plan = (await env.act("list")).redirects[0]!.plan!;
@@ -1145,6 +1145,8 @@ describe("a CloudPanel site replaces a redirect", () => {
     env.sites.push({ id: 45, domain: "keep.example", user: "keep", selfSigned: false });
 
     env.cf.tokens.get(TOKEN)!.status = "disabled";
+    // Automatic is on, so the hook names the problem instead of waiting for Automatic.
+    expect(await REDIRECTS_ADDON.newSites!.run(env.options() as Record<string, unknown>)).toBe("keep.example kept for now; see the problem in Redirects");
     const unreadable = await env.act("check");
     expect(unreadable.redirects[0]!.plan!.problems.join(" ")).toContain("Cloudflare could not be read");
     expect(env.redirectRules("keep.example")).toHaveLength(1);
