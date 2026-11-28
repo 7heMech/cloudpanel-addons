@@ -12,7 +12,6 @@ import type { Addresses } from "./addresses";
 import { grants, targetFor, uncertain, type TokenAccess } from "../../lib/cloudflare/access";
 import { PERMISSIONS } from "../../lib/cloudflare/tokens";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
-import { redirectHosts, type RedirectDomain } from "../../lib/redirect-domains";
 import { CloudflareDnsProvider } from "./cloudflare-provider";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import { composeProfiles, type AccountRef, type Policy, type Profile, type Secrets } from "./model";
@@ -22,7 +21,7 @@ import {
   type RecordOp, type RecordWrite,
 } from "./provider";
 import {
-  describeRecord, diffRecords, normalizeRenderedForProvider, renderProfile, renderRedirect, wildcardSource,
+  describeRecord, diffRecords, normalizeRenderedForProvider, renderProfile, wildcardSource,
   type Claim, type Diff, type Rendered, type SiteVars,
 } from "./records";
 
@@ -32,7 +31,7 @@ export interface PanelSite {
   id: number;
   domain: string;
   type: string;
-  /** Its site user; absent for a redirect domain. */
+  /** Its site user; absent for a DNS-only domain. */
   user?: string;
   /** When CloudPanel created it, in milliseconds. */
   createdAt: number;
@@ -41,8 +40,8 @@ export interface PanelSite {
   /** Certificate PEM from CloudPanel's `certificate` table when available. */
   certificatePem?: string | null;
   cloudflareOnly: boolean;
-  /** Set for one of Redirects' domains, whose Mail role (and a stand-in's addresses) DNS plans beside the sites. */
-  redirect?: RedirectDomain;
+  /** Set for a domain an administrator added with no CloudPanel site, planned beside the sites. */
+  dnsOnly?: true;
   /** Set for the panel hostname, planned beside the sites too. */
   panel?: true;
 }
@@ -118,8 +117,6 @@ export interface SitePlan {
   certificateNames: string[];
   /** A new site whose other changes wait for an administrator's review. */
   held?: true;
-  /** One of Redirects' domains: DNS writes its Mail role, and points a stand-in's hosts at this server. */
-  redirect?: true;
   /** The panel hostname. */
   panel?: true;
   /** The zone wildcard that covers this entry's own address records, when explicit ones are omitted. */
@@ -143,8 +140,6 @@ export interface RunContext {
   fetch?: ApiFetch;
   /** When each provider asked to be left alone until, carried between runs. */
   backoff: { cloudflare: number; mailcow: number; powerdns?: number };
-  /** Redirects' domains, read from its saved state. */
-  redirects?: RedirectDomain[];
   /** Whether CloudPanel serves an issued certificate for the panel hostname, so Cloudflare may proxy it. */
   panelProxied?: boolean;
   /** Each connection's token as the last check read it, for a run that does not read it again. */
@@ -223,23 +218,19 @@ export class DnsRun {
   private readonly powerdnsBackoff: { until: number };
   private readonly mailcowBackoff: { until: number };
   private readonly held: Set<string>;
-  /** CloudPanel's sites, then Redirects' domains. */
+  /** CloudPanel's sites, then the DNS-only domains. */
   readonly entries: PanelSite[];
-  private readonly redirects: Map<string, RedirectDomain>;
-  private readonly siteDomains: Set<string>;
   private readonly panelHost: string | null;
 
   constructor(private readonly context: RunContext) {
-    this.redirects = new Map((context.redirects ?? []).map((redirect) => [redirect.source, redirect]));
-    this.siteDomains = new Set(context.sites.map((site) => site.domain));
+    const siteDomains = new Set(context.sites.map((site) => site.domain));
+    const dnsOnly = context.policy.domains.filter((domain) => !siteDomains.has(domain));
     const host = context.policy.panelHost;
-    // A site or redirect domain of the same name is that entry's, and the panel hostname waits.
-    this.panelHost = host && !this.siteDomains.has(host) && !this.redirects.has(host) ? host : null;
+    // A site or domain of the same name is that entry's, and the panel hostname waits.
+    this.panelHost = host && !siteDomains.has(host) && !dnsOnly.includes(host) ? host : null;
     this.entries = [
-      ...context.sites.filter((site) => !this.redirects.has(site.domain)),
-      ...[...this.redirects.values()].map((redirect) => ({
-        id: 0, domain: redirect.source, type: "redirect", createdAt: 0, selfSigned: false, cloudflareOnly: false, redirect,
-      })),
+      ...context.sites,
+      ...dnsOnly.map((domain) => ({ id: 0, domain, type: "domain", createdAt: 0, selfSigned: false, cloudflareOnly: false, dnsOnly: true as const })),
       ...this.panelHost ? [{ id: 0, domain: this.panelHost, type: "panel", createdAt: 0, selfSigned: false, cloudflareOnly: false, panel: true as const }] : [],
     ];
     this.cloudflareBackoff = { until: context.backoff.cloudflare };
@@ -399,20 +390,14 @@ export class DnsRun {
     return uncertain(token.grants, permission, held ? "yes" : "no") ? null : held;
   }
 
-  /** No connection means DNS writes nothing for a redirect domain. */
-  private onServer(): boolean {
-    return this.connectionMeta.length === 0;
-  }
-
   plannedDomains(): string[] {
-    return this.entries.filter((entry) => entry.redirect || this.profilesOf(entry.domain).length > 0).map((entry) => entry.domain);
+    return this.entries.filter((entry) => this.profilesOf(entry.domain).length > 0).map((entry) => entry.domain);
   }
 
   private roleProfiles(domain: string): { http: Profile | null; mail: Profile | null } {
     if (domain === this.panelHost) return { http: panelProfile(this.context.panelProxied === true), mail: null };
     const assigned = this.context.policy.assignments[domain];
-    // A redirect domain's HTTP role is Redirects'; a stored HTTP profile waits until the redirect is gone.
-    const http = assigned?.http && !this.redirects.has(domain)
+    const http = assigned?.http
       ? this.context.policy.profiles.find((profile) => profile.role === "http" && profile.id === assigned.http) ?? null
       : null;
     const mail = assigned?.mail
@@ -493,9 +478,7 @@ export class DnsRun {
     const mailDomains: string[] = [];
     for (const domain of domains) {
       const profile = this.profileOf(domain);
-      const redirect = this.redirects.has(domain);
-      if (!profile && !redirect) continue;
-      if (redirect && this.onServer()) continue;
+      if (!profile) continue;
       const resolved = this.resolve(domain);
       if (resolved.kind === "zone") refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
       if (profile?.mailcow && !this.context.panelOnly) mailDomains.push(domain);
@@ -595,13 +578,13 @@ export class DnsRun {
     published: readonly DnsRecord[],
     allWanted: boolean,
   ): void {
-    if (!out || plan.problems.length || (site.redirect && plan.held)) return;
-    const waitsAt = (name: string) => Boolean(plan.held) && !site.redirect
+    if (!out || plan.problems.length) return;
+    const waitsAt = (name: string) => Boolean(plan.held)
       && diff.ops.some((op) => op.record.name === name && !pointsOwnName(site.domain, op, published));
     const records: RecordWrite[] = [];
     for (const record of diff.wanted) {
       if (waitsAt(record.name)) continue;
-      if (record.name.startsWith("*.") || allWanted || site.redirect || !ADDRESS_TYPES.has(record.type)) {
+      if (record.name.startsWith("*.") || allWanted || !ADDRESS_TYPES.has(record.type)) {
         records.push(record);
       }
     }
@@ -612,36 +595,20 @@ export class DnsRun {
     out.set(site.domain, { zoneKey, records, wildcardClaims });
   }
 
-  /** The plan for one site, or one redirect domain, from what has been read. */
+  /** The plan for one site or DNS-only domain, from what has been read. */
   planSite(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
-    const plan = this.planEntry(site, siblings, out, allWanted);
-    // A redirect domain held after a connection arrived waits for its review as a whole.
-    if (site.redirect && plan.held) plan.changes = plan.changes.map((change) => change.action === "note" ? change : { ...change, waits: true });
-    return plan;
-  }
-
-  private planEntry(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
-    const { redirect } = site;
     const { http, mail } = this.roleProfiles(site.domain);
     const profile = composeProfiles(http, mail);
     const plan: SitePlan = {
       domain: site.domain, httpProfileId: http?.id ?? null, mailProfileId: mail?.id ?? null,
       mode: this.context.policy.automatic || (site.panel && this.context.panelOnly) ? "enforce" : "report",
       zone: null,
-      changes: [], problems: [], zoneChoices: [], certificateNames: [], ...redirect && { redirect: true as const },
+      changes: [], problems: [], zoneChoices: [], certificateNames: [],
       ...site.panel && { panel: true as const },
     };
     this.diffs.delete(site.domain);
-    if (!profile && !redirect) return plan;
+    if (!profile) return plan;
     if (this.held.has(site.domain)) plan.held = true;
-    if (redirect && this.siteDomains.has(site.domain)) {
-      plan.problems.push(`CloudPanel has a site ${site.domain}; delete the site, or replace the redirect in Redirects`);
-      return plan;
-    }
-    if (redirect && this.onServer()) {
-      if (profile) plan.changes.push({ action: "note", subject: "Mail role", detail: "Its records apply once a DNS connection reaches this domain" });
-      return plan;
-    }
 
     const resolved = this.resolve(site.domain);
     if (resolved.kind === "unreachable") {
@@ -666,17 +633,8 @@ export class DnsRun {
     }
     plan.problems.push(...this.failures.get(site.domain) ?? []);
     if (profile?.mailcow) this.mailChanges(site.domain, profile, plan);
-    const render = (zoneName: string, provider: DnsProvider): Rendered => {
-      const raw = redirect
-        ? renderRedirect(
-          profile,
-          redirect.hosts ?? redirectHosts(redirect.source, zoneName),
-          this.vars(site.domain, zoneName, profile),
-          servedHere(redirect, provider),
-        )
-        : renderProfile(profile!, this.vars(site.domain, zoneName, profile));
-      return normalizeRenderedForProvider(raw, provider);
-    };
+    const render = (zoneName: string, provider: DnsProvider): Rendered =>
+      normalizeRenderedForProvider(renderProfile(profile, this.vars(site.domain, zoneName, profile)), provider);
 
     if (resolved.kind === "missing") {
       const { createIn } = resolved;
@@ -694,9 +652,9 @@ export class DnsRun {
         plan.changes.push({ action: "create", subject: `${providerLabel} zone`, detail: `${resolved.name} in ${account.name || account.id}; then set its nameservers at the registrar` });
         const zoneKey = `missing:${resolved.name}`;
         const rendered = render(resolved.name, createProvider);
-        const ctx = redirect ? undefined : this.siblingContext(siblings, zoneKey, site.domain);
+        const ctx = this.siblingContext(siblings, zoneKey, site.domain);
         // A new zone is empty, so everything the profile wants (other than what a sibling's wildcard covers) is a record to create.
-        const diff = diffRecords(rendered, [], { allowWildcard: !redirect, ...ctx });
+        const diff = diffRecords(rendered, [], { allowWildcard: true, ...ctx });
         plan.problems.push(...diff.problems);
         this.noteWildcard(plan, diff, site.domain);
         this.checkPanelAddress(site, diff, plan);
@@ -718,8 +676,8 @@ export class DnsRun {
 
     const zoneKey = `zone:${key}`;
     const rendered = render(resolved.ref.zone.name, provider);
-    const ctx = redirect ? undefined : this.siblingContext(siblings, zoneKey, site.domain);
-    const diff = diffRecords(rendered, state.records, { allowWildcard: !redirect, ...ctx });
+    const ctx = this.siblingContext(siblings, zoneKey, site.domain);
+    const diff = diffRecords(rendered, state.records, { allowWildcard: true, ...ctx });
     this.diffs.set(site.domain, diff);
     plan.problems.push(...diff.problems);
     this.noteWildcard(plan, diff, site.domain);
@@ -729,10 +687,10 @@ export class DnsRun {
     }
     for (const op of diff.ops) {
       const change = this.recordChange(op, diff, provider.capabilities.proxy);
-      plan.changes.push(plan.held && !redirect && !pointsOwnName(site.domain, op, state.records) ? { ...change, waits: true } : change);
+      plan.changes.push(plan.held && !pointsOwnName(site.domain, op, state.records) ? { ...change, waits: true } : change);
     }
     this.recordSibling(out, site, zoneKey, plan, rendered, diff, state.records, allWanted);
-    if (redirect || site.panel) return plan;
+    if (site.panel) return plan;
     const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
     const www = `www.${site.domain}`;
     const effective = [...state.records, ...diff.wanted, ...(ctx?.zoneRecords ?? [])];
@@ -843,7 +801,7 @@ export class DnsRun {
   }
 
   /**
-   * Plans every site and redirect domain, then marks those in one zone whose
+   * Plans every site and DNS-only domain, then marks those in one zone whose
    * profiles want different records at one name. With `live` true (or Ask
    * first), plans strictly against published records in Cloudflare. Otherwise
    * runs a two-pass sibling context so reviews and pre-enforce plans see both
@@ -860,7 +818,7 @@ export class DnsRun {
     const pass0 = this.entries.map((site) => this.planSite(site, undefined, pass0Out, false));
     this.markClashes(pass0);
     const eligible = new Set(pass0
-      .filter((plan) => !plan.problems.length && !(plan.redirect && plan.held) && (!allowed || allowed.has(plan.domain)))
+      .filter((plan) => !plan.problems.length && (!allowed || allowed.has(plan.domain)))
       .map((plan) => plan.domain));
     const pass1Siblings: Siblings = new Map([...pass0Out].filter(([domain]) => eligible.has(domain)));
 
@@ -933,21 +891,20 @@ export class DnsRun {
     if (plan.wildcard) return 3;
     const selfNonAddress = diff.wanted.some((record) => !ADDRESS_TYPES.has(record.type)
       && (record.name === plan.domain || record.name.endsWith(`.${plan.domain}`)));
-    if (plan.redirect || selfNonAddress || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
+    if (selfNonAddress || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
     if (diff.wanted.length > 0) return 2;
     return 3;
   }
 
   /**
-   * Makes the given sites and redirect domains match once DNS is Automatic.
-   * Those with problems are left alone, and so is a held redirect domain.
+   * Makes the given sites and DNS-only domains match once DNS is Automatic.
+   * Those with problems are left alone.
    */
   async enforce(domains: string[]): Promise<void> {
     const scope = new Set(domains);
     const ready = () => this.planAll(domains)
-      .filter((plan) => plan.mode === "enforce" && !plan.problems.length && scope.has(plan.domain) && !(plan.redirect && plan.held));
+      .filter((plan) => plan.mode === "enforce" && !plan.problems.length && scope.has(plan.domain));
 
-    if (this.onServer()) return;
     await this.createZones(ready());
     const targets = ready().filter((plan) => plan.zone);
     if (!targets.length) return;
@@ -960,7 +917,7 @@ export class DnsRun {
     await Promise.all([...new Set(after.map(planZoneKey))].map(async (key) => {
       const state = this.zones.get(key)!;
       const provider = this.providers.get(state.ref.connectionId)!;
-      // One zone's writes go in order: wildcard writers first, then redirect domains and explicit/non-address writers (deepest first),
+      // One zone's writes go in order: wildcard writers first, then explicit/non-address writers (deepest first),
       // then wildcard-blocked explicit sites, then wildcard-covered sites that delete redundant records.
       const ordered = after.filter((candidate) => planZoneKey(candidate) === key)
         .sort((a, b) => (this.writeOrder(a) - this.writeOrder(b)) || (b.domain.length - a.domain.length));
@@ -1085,7 +1042,7 @@ export class DnsRun {
     const result: Record<string, ManagedRecords> = {};
     for (const plan of plans) {
       const diff = this.diffs.get(plan.domain);
-      if ((!this.context.policy.automatic && !(plan.panel && this.context.panelOnly)) || plan.redirect || !plan.zone || !diff || !diff.matched.length) continue;
+      if ((!this.context.policy.automatic && !(plan.panel && this.context.panelOnly)) || !plan.zone || !diff || !diff.matched.length) continue;
       const state = this.zones.get(zoneMapKey(plan.zone.connectionId ?? "", plan.zone.id))!;
       result[plan.domain] = {
         zoneId: plan.zone.id,
@@ -1167,11 +1124,6 @@ export class DnsRun {
  * at its own name or `www`, or a new record at a name that has no published
  * records yet (such as a missing `*.{domain}` wildcard).
  */
-/** Whether a redirect domain's hosts point at this server: a stand-in serves it, or the zone has no edge redirects. */
-function servedHere(redirect: RedirectDomain, provider: DnsProvider): boolean {
-  return redirect.standIn || redirect.mode === "local" || !provider.capabilities.edgeRedirects;
-}
-
 function pointsOwnName(domain: string, op: RecordOp, published: readonly DnsRecord[]): boolean {
   const own = op.record.name === domain || op.record.name === `www.${domain}`;
   if (op.action === "create") return own || !published.some((record) => record.name === op.record.name);

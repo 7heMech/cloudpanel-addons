@@ -338,7 +338,6 @@ export class PowerDnsProvider implements DnsProvider {
     this.defaultTtl = config.defaultTtl;
     this.capabilities = {
       proxy: false,
-      edgeRedirects: false,
       createZone: config.createZones,
       autoTtl: false,
       comments: false,

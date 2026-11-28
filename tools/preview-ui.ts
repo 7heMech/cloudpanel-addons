@@ -141,8 +141,7 @@ function dnsPreviewState(url: URL): DnsState {
     domain, httpProfileId: "web", mailProfileId: null, mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
-  const redirect = (_source: string, target: string, extra: { standIn?: boolean; mailProfileId?: string | null } = {}): { target: string; standIn: boolean } =>
-    ({ target, standIn: extra.standIn ?? false });
+  const redirectedBy = (source: string, target: string) => ({ redirectedBy: { source, target } });
   const mailRole = mailcowUnlinked ? "google" : "mailcow";
   const mailMissing = mailcowRemoved ? { mailcowMissing: true as const } : {};
   const mailMissingProblems = mailcowRemoved ? ["Mailcow is not connected; connect Mailcow or change this domain's Mail role"] : [];
@@ -165,9 +164,8 @@ function dnsPreviewState(url: URL): DnsState {
   const sites: DnsState["sites"] = setup ? [
     { domain: "example.com", type: "wordpress", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
     { domain: "shop.example.com", type: "php", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
-    { domain: "old-name.example.org", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: null, ssl: null,
-      redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
-      plan: { ...plan("old-name.example.org", { httpProfileId: null, mailProfileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
+    { domain: "old-name.example.org", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null,
+      ...redirectedBy("old-name.example.org", "https://example.com") },
   ] : powerdnsOnly ? sortSites([
     { domain: "example.com", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: null, plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", httpRole: "site", httpProfileId: "web", mailProfileId: "google", plan: plan("shop.example.com", { mailProfileId: "google", changes: [
@@ -178,9 +176,9 @@ function dnsPreviewState(url: URL): DnsState {
       httpProfileId: null, mailProfileId: mailRole, zone: zone("example.org", "active", "powerdns"), problems: mailMissingProblems,
       changes: mailOrgChanges(true, false) }), ssl: null },
     { domain: "docs.example.com", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
-      redirect: redirect("example-brand.net", "https://example.com", { mailProfileId: mailRole, standIn: true }),
-      plan: { ...plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", "powerdns"), problems: mailMissingProblems, certificateNames: [] }), redirect: true as const } },
+    { domain: "example-brand.net", type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
+      ...redirectedBy("example-brand.net", "https://example.com"),
+      plan: plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", "powerdns"), problems: mailMissingProblems, certificateNames: [] }) },
   ]) : sortSites([
     { domain: "example.com", type: "wordpress", httpRole: "site", httpProfileId: "web", mailProfileId: "google", plan: plan("example.com", { mailProfileId: "google", certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc", plan: plan("shop.example.com", { mailProfileId: "dmarc", changes: [
@@ -205,12 +203,14 @@ function dnsPreviewState(url: URL): DnsState {
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
     { domain: "docs.example.com", type: "static", httpRole: "dns-only", httpProfileId: null, mailProfileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
-      redirect: redirect("example-brand.net", "https://example.com", { mailProfileId: mailRole, standIn: mixedProviders }),
-      plan: { ...plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), problems: mailMissingProblems, certificateNames: [] }), redirect: true as const } },
-    { domain: "book.example.com", type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: null, ssl: null,
-      redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
-      plan: { ...plan("book.example.com", { httpProfileId: null, mailProfileId: null, certificateNames: [], changes: [] }), redirect: true as const } },
+    { domain: "example-brand.net", type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: mailRole, ...mailMissing, ssl: null,
+      ...redirectedBy("example-brand.net", "https://example.com"),
+      plan: plan("example-brand.net", { httpProfileId: null, mailProfileId: mailRole, zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), problems: mailMissingProblems, certificateNames: [] }) },
+    { domain: "status.example.org", type: "domain", httpRole: "dns-only", httpProfileId: null, mailProfileId: "dmarc", ssl: null,
+      plan: plan("status.example.org", { httpProfileId: null, mailProfileId: "dmarc", zone: zone("example.org", "active", mixedProviders ? "powerdns" : "cloudflare"), certificateNames: [] }) },
+    { domain: "book.example.com", type: "static", httpRole: "site", httpProfileId: "web", mailProfileId: null, ssl: null,
+      ...redirectedBy("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
+      plan: plan("book.example.com", { certificateNames: ["book.example.com"] }) },
   ]);
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const log: DnsState["log"] = setup ? [] : powerdnsOnly ? [

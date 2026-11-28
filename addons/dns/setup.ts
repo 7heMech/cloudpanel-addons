@@ -114,7 +114,7 @@ export function mailcowActions(state: DnsSetupState): ActionNeeded[] {
   if (linked) return [];
   const mailcowIds = new Set(state.policy.profiles.filter((profile) => profile.role === "mail" && profile.mailcow).map((profile) => profile.id));
   if (!mailcowIds.size) return [];
-  // Sites and Redirects' domains alike keep their Mail role in assignments.
+  // Sites and DNS-only domains alike keep their Mail role in assignments.
   const affected = Object.entries(state.policy.assignments)
     .filter(([, assigned]) => assigned.mail && mailcowIds.has(assigned.mail))
     .map(([domain]) => domain)

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CfRecord } from "../lib/cloudflare/api";
 import { composeProfiles, parseProfile, type Profile } from "../addons/dns/model";
 import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
-import { diffRecords, renderProfile, renderRedirect, wildcardSource, type SiteVars } from "../addons/dns/records";
+import { diffRecords, renderProfile, wildcardSource, type SiteVars } from "../addons/dns/records";
 import { tokenTemplate } from "../lib/cloudflare/tokens";
 
 const vars = (domain: string, zone = "example.com", extra: Partial<SiteVars> = {}): SiteVars => ({

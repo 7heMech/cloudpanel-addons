@@ -1,7 +1,8 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`the web-reachable verbs and who may call them 1`] = `
-"dns:assign                         admin
+"dns:add-domain                     admin
+dns:assign                         admin
 dns:check                          admin
 dns:choose-zone                    admin
 dns:confirm                        admin
@@ -11,6 +12,7 @@ dns:list                           admin
 dns:panel-host-helper              admin
 dns:provision                      panel-user
 dns:remove-connection              admin
+dns:remove-domain                  admin
 dns:remove-mailcow                 admin
 dns:remove-records                 admin
 dns:save-connection                admin

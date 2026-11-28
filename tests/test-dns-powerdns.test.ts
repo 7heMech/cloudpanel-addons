@@ -201,16 +201,7 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
     return reply.review ? act("confirm", { token: reply.review.token }) : reply;
   };
 
-  const redirectsDir = join(dir, "redirects");
-  /** Writes Redirects' saved state as the Redirects addon would. */
-  const redirects = (entries: { source: string; target: string; mode?: "auto" | "local"; standIn?: boolean }[]): void => {
-    mkdirSync(redirectsDir, { recursive: true });
-    const policy = { version: 1, automatic: true, held: [], zoneChoices: {}, redirects: entries.map(({ standIn: _standIn, ...entry }) => ({ status: 301, keepPath: true, keepQuery: true, ...entry })) };
-    writeFileSync(actionOptions.paths.redirectsPolicyFile, JSON.stringify(policy), { mode: 0o600 });
-    const standIns = Object.fromEntries(entries.filter((entry) => entry.standIn).map((entry) => [entry.source, { target: entry.target, status: 301, keepPath: true, keepQuery: true, siteUser: "stand-in-1a2b3c4d", createdAt: START, certificate: { attempts: 0, nextAt: 0, done: false } }]));
-    writeFileSync(actionOptions.paths.standInsFile, JSON.stringify(standIns), { mode: 0o600 });
-  };
-  return { dir, pdns, cf, mailcow, sites, custom, clock, issued, actionOptions, act, apply, redirects };
+  return { dir, pdns, cf, mailcow, sites, custom, clock, issued, actionOptions, act, apply };
 }
 
 describe("PowerDNS URL validation", () => {
@@ -390,7 +381,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     expect(applied.log.some((entry) => entry.subject === "PowerDNS zone" && entry.action === "create")).toBe(true);
   });
 
-  test("a redirect domain on PowerDNS gets server A/AAAA for its stand-in plus its Mail role's non-web rows", async () => {
+  test("a DNS-only domain on PowerDNS gets every row of its Mail role", async () => {
     const env = setupEnv();
     env.pdns.addZone("old.example");
     await env.act("save-connection", { provider: "powerdns", label: "Primary NS", url: PDNS_URL, apiKey: PDNS_KEY });
@@ -404,21 +395,16 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
         { type: "TXT", name: "{domain}", content: "v=spf1 -all", proxied: false, ttl: 300, priority: null, apexOnly: false },
       ],
     });
-    env.redirects([{ source: "old.example", target: "https://new.example", mode: "local", standIn: true }]);
-    await env.act("assign", { domains: ["old.example"], mailProfileId: "mail" });
     await env.apply("set-automatic", { automatic: true });
+    await env.apply("add-domain", { domain: "old.example", mailProfileId: "mail" });
 
-    // PowerDNS holds server A/AAAA (never 100::) at the stand-in's hosts plus MX/SPF; the profile's own A row stays out.
     expect(env.pdns.recordsSummary("old.example")).toEqual([
-      "A old.example. 300 203.0.113.10",
-      "A www.old.example. 300 203.0.113.10",
-      "AAAA old.example. 300 2001:db8::10",
-      "AAAA www.old.example. 300 2001:db8::10",
+      "A old.example. 300 198.51.100.9",
       "MX old.example. 300 10 mail.example.net.",
       'TXT old.example. 300 "v=spf1 -all"',
     ]);
     const row = (await env.act("list")).sites.find((site) => site.domain === "old.example")!;
-    expect(row).toMatchObject({ type: "redirect", httpRole: "redirect", mailProfileId: "mail", redirect: { target: "https://new.example", standIn: true } });
+    expect(row).toMatchObject({ type: "domain", httpRole: "dns-only", mailProfileId: "mail" });
   });
 
   test("panel hostname on PowerDNS stays unproxied, hands off to unproxied wildcards, and makes no proxy change on cert issuance", async () => {
@@ -535,7 +521,6 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     const provider = new PowerDnsProvider(policy.powerdns[0]!, PDNS_KEY);
     expect(provider.capabilities).toEqual({
       proxy: false,
-      edgeRedirects: false,
       createZone: false,
       autoTtl: false,
       comments: false,

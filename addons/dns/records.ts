@@ -121,7 +121,7 @@ function rowClaims(type: string, name: string, content: string): Claim {
  * The records `profile` wants for one site. SPF rows are returned as written
  * here and merged with what is published once the zone has been read.
  */
-export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: string, type: string) => boolean): Rendered {
+export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
   const rendered: Rendered = { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
   profile.records.forEach((row: RecordTemplate, index) => {
     const where = `Record ${index + 1} (${row.type} ${row.name})`;
@@ -135,7 +135,6 @@ export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: st
       rendered.problems.push(`${where}: ${name || "its name"} is not a name in the ${vars.zone} zone`);
       return;
     }
-    if (skip?.(name, row.type)) return;
     const unknown = (["ipv4", "ipv6"] as const).find((family) => vars[family] === null && row.content.includes(`{${family}}`));
     if (unknown) {
       rendered.problems.push(`${where}: this server's ${unknown === "ipv4" ? "IPv4" : "IPv6"} address could not be detected; set it under Server addresses`);
@@ -193,30 +192,6 @@ export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: st
 
 const WEB_TYPES = new Set(["A", "AAAA", "CNAME"]);
 const ADDRESS_TYPES = new Set(["A", "AAAA"]);
-
-/**
- * What a redirect domain wants from DNS: its Mail profile's rows, if it has one,
- * without web rows at the domain, its `www` and its `*.`. Where the redirect is
- * served here (`servedHere`, by a stand-in site or on a provider without edge
- * redirects) it also wants unproxied A and AAAA records pointing to this server
- * at its hosts. Otherwise those hosts are Redirects' to write, and are left
- * unclaimed.
- */
-export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, servedHere: boolean): Rendered {
-  const own = new Set([vars.domain, `www.${vars.domain}`, `*.${vars.domain}`, ...hosts]);
-  const web = (name: string, type: string) => own.has(name) && WEB_TYPES.has(type);
-  const rendered: Rendered = profile ? renderProfile(profile, vars, web) : { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
-  if (!servedHere) return rendered;
-  if (vars.ipv4 === null) rendered.problems.push("This server's IPv4 address could not be detected; set it under Server addresses");
-  if (vars.ipv6 === null) rendered.problems.push("This server's IPv6 address could not be detected; set it under Server addresses");
-  if (vars.ipv4 === "" && vars.ipv6 === "") rendered.problems.push("This server has no IPv4 or IPv6 address for this redirect; set one under Server addresses");
-  for (const host of hosts) {
-    rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
-    if (vars.ipv4) rendered.records.push({ type: "A", name: host, content: vars.ipv4, proxied: false, ttl: 1, priority: null });
-    if (vars.ipv6) rendered.records.push({ type: "AAAA", name: host, content: canonical("AAAA", vars.ipv6), proxied: false, ttl: 1, priority: null });
-  }
-  return rendered;
-}
 
 /** Resolves proxy flags and Auto TTL against a provider's capabilities before diffing. */
 export function normalizeRenderedForProvider(

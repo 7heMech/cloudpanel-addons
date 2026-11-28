@@ -31,14 +31,14 @@ import { MailcowApi } from "./mailcow";
 import {
   connectionId, hostname, isMailcowLinked, legacyProfileZones, parseAccountRef, parseMailcow, parsePolicy, parsePowerDnsConnection, parseProfile,
   parseSecrets, profileEffect, profileId, providerId, secretText, ipAddress, EMPTY_MAILCOW, MAX_CONNECTIONS,
-  MAX_PROFILES, type HttpRole, type MailcowSettings, type Policy, type PowerDnsConnection, type Profile, type ProfileRole, type Secrets,
+  MAX_DOMAINS, MAX_PROFILES, type HttpRole, type MailcowSettings, type Policy, type PowerDnsConnection, type Profile, type ProfileRole, type Secrets,
 } from "./model";
 import { parsePowerDnsApiKey, PowerDnsProvider } from "./powerdns";
 import { PROVIDER_LABELS, type DnsRecord, type ProviderKind } from "./provider";
 import { mailcowSeededProfile, presetsFor, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
-import { readRedirectDomains, type RedirectDomain } from "../../lib/redirect-domains";
-import { standInDomains } from "../../lib/stand-ins";
+import { coveredHosts, readEdgeSources, readRedirectDomains, type RedirectDomain } from "../../lib/redirect-domains";
+import { isStandInSite, readStandInMarks } from "../../lib/stand-ins";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
 import { accessView, type AccessView } from "../../lib/cloudflare/access";
@@ -73,9 +73,10 @@ interface DnsPaths {
   cloudflareLockFile?: string;
   /** SMTP Relay's configuration, read only for the relay accounts the Mailcow form offers. */
   smtpConfig: string;
-  /** Redirects' saved redirects and stand-ins, read for redirect domains' Mail roles; default to Redirects' own files. */
+  /** Redirects' saved redirects, stand-ins and status, read for warnings and its stand-ins; default to Redirects' own files. */
   redirectsPolicyFile?: string;
   standInsFile?: string;
+  redirectsStatusFile?: string;
   /** Panel Tweaks' enable flag and switches, read only to see whether automatic SSL is enabled. */
   panelTweaksConfig?: string;
   panelTweaksFile?: string;
@@ -130,8 +131,8 @@ export interface SiteView {
   ssl: string | null;
   /** True when this domain's Mail role uses Mailcow while Mailcow is not connected. */
   mailcowMissing?: true;
-  /** One of Redirects' domains: where it goes, and whether a stand-in site on this server serves it now. */
-  redirect?: { target: string; standIn: boolean };
+  /** The redirect in Redirects whose source or hosts include this domain. */
+  redirectedBy?: { source: string; target: string };
 }
 
 export interface Review {
@@ -506,22 +507,45 @@ class Action {
     return this.cachedSites;
   }
 
-  /** CloudPanel's sites, without Redirects' stand-in sites. */
+  /** CloudPanel's sites, without the stand-ins `edgeStandIns` names. */
   sites(fresh = false): PanelSite[] {
-    const standIns = standInDomains(this.paths.standInsFile, this.paths.rootUid, this.paths.panelDb);
-    return this.panelSites(fresh).filter((site) => !standIns.has(site.domain));
+    const hidden = this.edgeStandIns(fresh);
+    return this.panelSites(fresh).filter((site) => !hidden.has(site.domain));
   }
 
-  /** Redirects' domains, whose Mail role DNS keeps whether or not Redirects is enabled. */
+  /**
+   * Redirects' stand-in sites whose redirect it serves at Cloudflare's edge,
+   * such as during a move there, so DNS never writes over its placeholders.
+   * Redirects' state that cannot be trusted leaves out every stand-in, or
+   * every site at a redirect's source when the stand-ins cannot be told.
+   */
+  edgeStandIns(fresh = false): Set<string> {
+    const marks = readStandInMarks(this.paths.standInsFile, this.paths.rootUid);
+    const edge = readEdgeSources({ statusFile: this.paths.redirectsStatusFile, rootUid: this.paths.rootUid });
+    const sources = marks ? null : new Set(this.redirects().map((redirect) => redirect.source));
+    return new Set(this.panelSites(fresh)
+      .filter((site) => (marks ? isStandInSite(marks[site.domain], site, this.now) : sources!.has(site.domain))
+        && (edge === null || edge.has(site.domain)))
+      .map((site) => site.domain));
+  }
+
+  /** The domains added with no CloudPanel site, as DNS plans them: a site at one is that site's. */
+  dnsOnlyDomains(policy: Policy): string[] {
+    const sites = new Set(this.sites().map((site) => site.domain));
+    return policy.domains.filter((domain) => !sites.has(domain));
+  }
+
+  /** Every domain DNS plans roles for: the sites, then the DNS-only domains. */
+  domainsOf(policy: Policy): string[] {
+    return [...this.sites().map((site) => site.domain), ...this.dnsOnlyDomains(policy)];
+  }
+
+  /** Redirects' domains, read for the warning on DNS rows they cover. */
   redirects(): RedirectDomain[] {
     this.cachedRedirects ??= readRedirectDomains({
       policyFile: this.paths.redirectsPolicyFile, standInsFile: this.paths.standInsFile, rootUid: this.paths.rootUid,
     });
     return this.cachedRedirects;
-  }
-
-  redirectSources(): Set<string> {
-    return new Set(this.redirects().map((redirect) => redirect.source));
   }
 
   addresses(): Addresses {
@@ -556,7 +580,7 @@ class Action {
     const status = this.files.status();
     const run = new DnsRun({
       policy, secrets, sites: this.sites(), addresses: this.addresses(), fetch: this.options.fetch,
-      backoff: status.backoff, redirects: this.redirects(),
+      backoff: status.backoff,
       panelProxied: overrides?.panelProxied ?? this.panelProxied(policy),
       panelOnly: overrides?.panelOnly,
       tokens: Object.fromEntries(status.connections.filter((report) => report?.active).map((report) => [report.id, report.token])),
@@ -602,16 +626,10 @@ class Action {
   private cleanupManagedForPolicy(next: Policy): void {
     const managed = this.files.managed();
     let forgot = false;
-    for (const site of this.sites()) {
-      const assigned = next.assignments[site.domain];
-      if (!managed[site.domain] || (next.automatic && (assigned?.http || assigned?.mail))) continue;
-      delete managed[site.domain];
-      forgot = true;
-    }
-    // A deleted site that became a redirect domain keeps its records: they are the redirect's now.
-    for (const source of this.redirectSources()) {
-      if (!managed[source]) continue;
-      delete managed[source];
+    for (const domain of this.domainsOf(next)) {
+      const assigned = next.assignments[domain];
+      if (!managed[domain] || (next.automatic && (assigned?.http || assigned?.mail))) continue;
+      delete managed[domain];
       forgot = true;
     }
     if (forgot) this.files.saveManaged(managed);
@@ -642,7 +660,7 @@ class Action {
     const plansByDomain = domains === "all" ? {} : Object.fromEntries(Object.entries(status.plans).filter(([domain]) => current.has(domain)));
     for (const plan of plans) {
       if (domains !== "all" && !domains.includes(plan.domain)) continue;
-      if (plan.httpProfileId || plan.mailProfileId || plan.redirect) plansByDomain[plan.domain] = plan;
+      if (plan.httpProfileId || plan.mailProfileId) plansByDomain[plan.domain] = plan;
       else delete plansByDomain[plan.domain];
     }
     const panelHost = run.entries.find((entry) => entry.panel)?.domain;
@@ -687,7 +705,7 @@ class Action {
     for (const plan of checked) {
       if (tracked[plan.domain]) managed[plan.domain] = tracked[plan.domain]!;
       // A settled enforcing entry handed off to a wildcard has no explicit records left to track.
-      else if (plan.mode === "enforce" && !plan.redirect && plan.zone && !plan.problems.length && plan.wildcard
+      else if (plan.mode === "enforce" && plan.zone && !plan.problems.length && plan.wildcard
         && !plan.changes.some((change) => change.action !== "note")) {
         delete managed[plan.domain];
       }
@@ -710,8 +728,9 @@ class Action {
     const status = this.files.status();
     const ssl = this.files.ssl();
     const sites = this.sites();
-    const redirects = this.redirects();
-    const domains = new Set([...sites.map((site) => site.domain), ...redirects.map((redirect) => redirect.source), ...policy.panelHost ? [policy.panelHost] : []]);
+    const dnsOnly = this.dnsOnlyDomains(policy);
+    const hidden = this.edgeStandIns();
+    const domains = new Set([...sites.map((site) => site.domain), ...dnsOnly, ...policy.panelHost ? [policy.panelHost] : []]);
     const accounts = status.connections.flatMap((connection) => connection.accounts.map((account) => ({
       connectionId: connection.id, accountId: account.id, label: `${account.name || account.id} (${connection.label})`,
     })));
@@ -719,49 +738,44 @@ class Action {
     const mailcowLinked = isMailcowLinked(policy.mailcow, secrets);
     const mailcowAffected = mailcowLinked ? [] : this.mailcowSites(policy).sort();
     const mailcowAffectedSet = new Set(mailcowAffected);
-    const redirectSources = new Set(redirects.map((redirect) => redirect.source));
+    const redirectedBy = new Map<string, { source: string; target: string }>();
+    for (const redirect of this.redirects()) {
+      for (const host of [redirect.source, ...coveredHosts(redirect)]) {
+        if (!redirectedBy.has(host)) redirectedBy.set(host, { source: redirect.source, target: redirect.target });
+      }
+    }
+    const view = (domain: string, type: string, siteId: number | null): SiteView => {
+      const assigned = policy.assignments[domain];
+      const httpProfileId = assigned?.http ?? null;
+      const mailProfileId = assigned?.mail ?? null;
+      const plan = status.plans[domain];
+      const request = ssl[domain];
+      const redirect = redirectedBy.get(domain);
+      return {
+        domain, type,
+        httpRole: httpProfileId ? "site" : "dns-only",
+        httpProfileId,
+        mailProfileId,
+        plan: plan && plan.httpProfileId === httpProfileId && plan.mailProfileId === mailProfileId ? plan : null,
+        ssl: httpProfileId && siteId !== null && request && request.siteId === siteId ? request.state : null,
+        ...(mailcowAffectedSet.has(domain) ? { mailcowMissing: true as const } : {}),
+        ...(redirect ? { redirectedBy: redirect } : {}),
+      };
+    };
     return {
       automatic: policy.automatic,
       createIn: policy.createIn,
       profiles: policy.profiles.map((profile) => ({
         ...profile,
         sites: profile.role === "http"
-          ? Object.entries(policy.assignments).filter(([domain, assigned]) => !redirectSources.has(domain) && assigned.http === profile.id).length
+          ? Object.entries(policy.assignments).filter(([domain, assigned]) => domains.has(domain) && assigned.http === profile.id).length
           : Object.entries(policy.assignments).filter(([domain, assigned]) => domains.has(domain) && assigned.mail === profile.id).length,
       })),
       defaultHttpProfileId: policy.defaultHttpProfileId,
       defaultMailProfileId: policy.defaultMailProfileId,
       sites: [
-        ...sites.filter((site) => !redirectSources.has(site.domain)).map((site): SiteView => {
-          const assigned = policy.assignments[site.domain];
-          const httpProfileId = assigned?.http ?? null;
-          const mailProfileId = assigned?.mail ?? null;
-          const plan = status.plans[site.domain];
-          const request = ssl[site.domain];
-          return {
-            domain: site.domain, type: site.type,
-            httpRole: httpProfileId ? "site" : "dns-only",
-            httpProfileId,
-            mailProfileId,
-            plan: plan && !plan.redirect && plan.httpProfileId === httpProfileId && plan.mailProfileId === mailProfileId ? plan : null,
-            ssl: httpProfileId && request && request.siteId === site.id ? request.state : null,
-            ...(mailcowAffectedSet.has(site.domain) ? { mailcowMissing: true as const } : {}),
-          };
-        }),
-        ...redirects.map((redirect): SiteView => {
-          const plan = status.plans[redirect.source];
-          const mailProfileId = policy.assignments[redirect.source]?.mail ?? null;
-          return {
-            domain: redirect.source, type: "redirect",
-            httpRole: "redirect",
-            httpProfileId: null,
-            mailProfileId,
-            plan: plan?.redirect && plan.mailProfileId === mailProfileId ? plan : null,
-            ssl: null,
-            ...(mailcowAffectedSet.has(redirect.source) ? { mailcowMissing: true as const } : {}),
-            redirect: { target: redirect.target, standIn: redirect.standIn },
-          };
-        }),
+        ...sites.map((site) => view(site.domain, site.type, site.id)),
+        ...dnsOnly.map((domain) => view(domain, "domain", null)),
       ].sort((a, b) => a.domain.localeCompare(b.domain)),
       connections: [
         ...policy.connections.map((connection): DnsConnectionView => {
@@ -802,7 +816,7 @@ class Action {
       smtpRelays: smtpRelayAccounts(this.paths.smtpConfig, this.paths.rootUid),
       server: { ...policy.server, detected: this.addresses() },
       orphans: Object.entries(managed)
-        .filter(([domain]) => !domains.has(domain))
+        .filter(([domain]) => !domains.has(domain) && !hidden.has(domain))
         .map(([domain, entry]) => ({ domain, zone: entry.zoneName, records: entry.records.length })),
       checkedAt: status.checkedAt,
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow, status.backoff.powerdns ?? 0),
@@ -813,16 +827,16 @@ class Action {
       presets: presetsFor(mailcowLinked),
       log: this.files.log().slice(0, PAGE_LOG),
       customDomain: this.customDomain() ?? null,
-      panelHost: this.panelHostView(policy, status.plans, sites),
+      panelHost: this.panelHostView(policy, status.plans, sites, dnsOnly),
     };
   }
 
-  private panelHostView(policy: Policy, plans: Record<string, SitePlan>, sites: PanelSite[]): PanelHostView | null {
+  private panelHostView(policy: Policy, plans: Record<string, SitePlan>, sites: PanelSite[], dnsOnly: string[]): PanelHostView | null {
     const name = policy.panelHost;
     if (!name) return null;
     const custom = this.customDomain() ?? null;
     const problem = sites.some((site) => site.domain === name) ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site`
-      : this.redirectSources().has(name) ? `${name} is a redirect domain in Redirects; remove the panel hostname or the redirect` : null;
+      : dnsOnly.includes(name) ? `${name} is a DNS-only domain; remove the panel hostname or the domain` : null;
     const plan = plans[name];
     const supportsProxy = plan?.zone ? plan.zone.provider !== "powerdns" : policy.connections.length > 0;
     return {
@@ -911,28 +925,36 @@ class Action {
     if (retrySsl) await this.retrySsl(plans);
   }
 
-  /** Puts sites CloudPanel created since the last look into the default HTTP/Mail roles. */
+  /**
+   * Puts sites CloudPanel created since the last look into the default
+   * HTTP/Mail roles. A site at a DNS-only domain takes it over, keeping its
+   * roles and taking the default HTTP role if it has none.
+   */
   adoptNewSites(policy: Policy): Policy {
-    const sites = this.sites();
+    const panel = this.panelSites();
     // An empty read is a panel database being restored, not every site deleted.
-    if (!sites.length) return policy;
+    if (!panel.length) return policy;
+    const sites = this.sites();
+    const domains = new Set(sites.map((site) => site.domain));
+    const hidden = this.edgeStandIns();
     const known = new Set(policy.knownSiteIds);
     const next = structuredClone(policy);
-    const redirects = this.redirectSources();
     for (const site of sites) {
-      if (known.has(site.id) || redirects.has(site.domain)) continue;
-      const existing = next.assignments[site.domain];
+      const listed = next.domains.includes(site.domain);
+      if (known.has(site.id) && !listed) continue;
+      next.domains = next.domains.filter((domain) => domain !== site.domain);
+      const existing = next.assignments[site.domain] ?? (listed ? { http: null, mail: null } : null);
       if (!existing && (next.defaultHttpProfileId || next.defaultMailProfileId)) {
         next.assignments[site.domain] = { http: next.defaultHttpProfileId, mail: next.defaultMailProfileId };
       } else if (existing && !existing.http && next.defaultHttpProfileId) {
-        // A site that replaced a redirect keeps the redirect's Mail role and takes the default HTTP role.
         next.assignments[site.domain] = { ...existing, http: next.defaultHttpProfileId };
       }
     }
     for (const domain of Object.keys(next.assignments)) {
-      if (!sites.some((site) => site.domain === domain) && !redirects.has(domain)) delete next.assignments[domain];
+      // A stand-in left out while Redirects serves it at the edge keeps its roles for when it is back.
+      if (!domains.has(domain) && !next.domains.includes(domain) && !hidden.has(domain)) delete next.assignments[domain];
     }
-    next.knownSiteIds = sites.map((site) => site.id);
+    next.knownSiteIds = panel.map((site) => site.id);
     next.held = next.held.filter((domain) => next.assignments[domain]);
     if (JSON.stringify(next) !== JSON.stringify(policy)) this.savePolicy(next);
     return next;
@@ -986,8 +1008,9 @@ class Action {
   private async syncSitesRun(): Promise<{ joined: string[]; createdZones: Set<string> }> {
     const before = this.files.policy();
     const known = new Set(before.knownSiteIds);
-    const added = this.sites().filter((site) => !known.has(site.id));
-    const removed = Object.keys(before.assignments).some((domain) => !this.sites().some((site) => site.domain === domain));
+    const added = this.sites().filter((site) => !known.has(site.id) || before.domains.includes(site.domain));
+    const current = new Set([...this.domainsOf(before), ...this.edgeStandIns()]);
+    const removed = Object.keys(before.assignments).some((domain) => !current.has(domain));
     if (!added.length && !removed) return { joined: [], createdZones: new Set() };
     const policy = this.adoptNewSites(before);
     this.enqueueNewSiteSsl(before, policy);
@@ -1016,8 +1039,8 @@ class Action {
     const policy = this.files.policy();
     const host = policy.panelHost;
     if (!host || !policy.automatic || this.files.status().panelProxied === this.panelProxied(policy)) return false;
-    // A site or redirect domain with the name keeps it out of every run, so there is nothing to wait for the lock over.
-    return !this.redirectSources().has(host) && !this.sites().some((site) => site.domain === host);
+    // A site or DNS-only domain with the name keeps it out of every run, so there is nothing to wait for the lock over.
+    return !policy.domains.includes(host) && !this.sites().some((site) => site.domain === host);
   }
 
   async syncPanelHost(): Promise<string | null> {
@@ -1038,8 +1061,9 @@ class Action {
   /** `asUser` names a non-administrator, who is told whether DNS is ready but not why. */
   async provision(domain: string, ssl: boolean, asUser = ""): Promise<ProvisionReply> {
     const synced = await this.syncSitesRun();
-    const site = this.site(domain);
     const policy = this.files.policy();
+    // An administrator may apply a DNS-only domain's roles; anything else is a site's.
+    const site = asUser || ssl || !this.dnsOnlyDomains(policy).includes(domain) ? this.site(domain) : null;
     const assigned = policy.assignments[domain];
     const hasAny = Boolean(assigned?.http || assigned?.mail);
     if (!hasAny || !policy.automatic) {
@@ -1052,13 +1076,13 @@ class Action {
     // few minutes, the moment it is for; for any other the last check answers.
     let plan: SitePlan | undefined;
     const createdInCall = new Set(synced.createdZones);
-    const checkedLive = !(asUser && this.now - site.createdAt > NEW_SITE_WINDOW);
+    const checkedLive = !(asUser && site && this.now - site.createdAt > NEW_SITE_WINDOW);
     if (!checkedLive) {
       plan = this.files.status().plans[domain];
     } else {
       if (ssl) {
         const requests = this.files.ssl();
-        if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
+        if (site && requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
       }
       const domains = this.wildcardAffected(policy, policy, [domain]);
       const run = this.run(policy);
@@ -1123,7 +1147,7 @@ class Action {
     const certificate = !site.selfSigned ? "installed"
       : policy.automatic && assigned?.http && request && request.siteId === site.id && !request.done ? "automatic"
       : "manual";
-    const zone = assigned && plan && !plan.redirect && plan.httpProfileId === assigned.http && plan.mailProfileId === assigned.mail ? plan.zone : null;
+    const zone = assigned && plan && plan.httpProfileId === assigned.http && plan.mailProfileId === assigned.mail ? plan.zone : null;
     if (!zone) return { zone: null, status: null, nameServers: [], certificate };
     return { zone: zone.name, status: zone.status, nameServers: zone.status === "active" ? [] : zone.nameServers, certificate };
   }
@@ -1142,30 +1166,32 @@ class Action {
   // Reviews
   // -------------------------------------------------------------------------
 
-  /** The sites and redirect domains whose records would change if `after` replaced `before`, once DNS is Automatic. */
+  /** The sites and DNS-only domains whose records would change if `after` replaced `before`, once DNS is Automatic. */
   affected(before: Policy, after: Policy): string[] {
     if (!after.automatic) return [];
     const mailcowBefore = JSON.stringify(before.mailcow);
     const mailcowAfter = JSON.stringify(after.mailcow);
     const createIn = JSON.stringify(before.createIn) !== JSON.stringify(after.createIn);
-    const redirects = this.redirectSources();
     const rolesOf = (policy: Policy, domain: string): { http: Profile | null; mail: Profile | null } => {
       const assigned = policy.assignments[domain];
+      const planned = policy === after ? afterDomains : beforeDomains;
+      if (!planned.has(domain)) return { http: null, mail: null };
       return {
-        http: assigned?.http && !redirects.has(domain) ? policy.profiles.find((profile) => profile.role === "http" && profile.id === assigned.http) ?? null : null,
+        http: assigned?.http ? policy.profiles.find((profile) => profile.role === "http" && profile.id === assigned.http) ?? null : null,
         mail: assigned?.mail ? policy.profiles.find((profile) => profile.role === "mail" && profile.id === assigned.mail) ?? null : null,
       };
     };
-    const domains = [...new Set([...this.sites().map((site) => site.domain), ...redirects, ...after.panelHost ? [after.panelHost] : []])];
+    const beforeDomains = new Set(this.domainsOf(before));
+    const afterDomains = new Set(this.domainsOf(after));
+    const domains = [...new Set([...beforeDomains, ...afterDomains, ...after.panelHost ? [after.panelHost] : []])];
     const direct = domains.filter((domain) => {
-      if (domain === after.panelHost && !this.sites().some((site) => site.domain === domain) && !redirects.has(domain)) {
+      if (domain === after.panelHost && !afterDomains.has(domain)) {
         return !before.automatic || createIn || before.panelHost !== domain || JSON.stringify(before.server) !== JSON.stringify(after.server)
           || Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
             (domain === zone || domain.endsWith(`.${zone}`)) && JSON.stringify(before.zoneChoices[zone]) !== JSON.stringify(after.zoneChoices[zone]));
       }
-      const redirect = redirects.has(domain);
       const next = rolesOf(after, domain);
-      if (!next.http && !next.mail && !redirect) return false;
+      if (!next.http && !next.mail) return false;
       if (!before.automatic || createIn) return true;
       if (before.held.includes(domain) && !after.held.includes(domain)) return true;
       const zoneChoiceChanged = Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
@@ -1173,7 +1199,6 @@ class Action {
       if (zoneChoiceChanged) return true;
       if (JSON.stringify(before.server) !== JSON.stringify(after.server)) return true;
       const previous = rolesOf(before, domain);
-      if (!next.http && !next.mail) return false;
       if ((previous.http?.id ?? null) !== (next.http?.id ?? null)) return true;
       if ((previous.mail?.id ?? null) !== (next.mail?.id ?? null)) return true;
       if (next.http && (!previous.http || profileEffect(previous.http) !== profileEffect(next.http))) return true;
@@ -1192,10 +1217,9 @@ class Action {
    */
   private wildcardAffected(before: Policy, after: Policy, direct: string[]): string[] {
     if (!direct.length) return [];
-    const redirects = this.redirectSources();
     const profilesOf = (policy: Policy, domain: string): Profile[] => {
       const assigned = policy.assignments[domain];
-      const http = assigned?.http && !redirects.has(domain) ? policy.profiles.find((profile) => profile.role === "http" && profile.id === assigned.http) : undefined;
+      const http = assigned?.http ? policy.profiles.find((profile) => profile.role === "http" && profile.id === assigned.http) : undefined;
       const mail = assigned?.mail ? policy.profiles.find((profile) => profile.role === "mail" && profile.id === assigned.mail) : undefined;
       return [http, mail].filter((profile): profile is Profile => Boolean(profile));
     };
@@ -1225,7 +1249,7 @@ class Action {
     };
     const directSet = new Set(direct);
     const directIntermediates = new Set(direct.flatMap(intermediateAncestors));
-    const domains = [...new Set([...this.sites().map((site) => site.domain), ...after.panelHost ? [after.panelHost] : []])];
+    const domains = [...new Set([...this.domainsOf(after), ...after.panelHost ? [after.panelHost] : []])];
     const set = new Set(direct);
     for (const domain of domains) {
       if (set.has(domain)) continue;
@@ -1419,6 +1443,7 @@ class Action {
     if (!entry) failAction(`DNS tracks no records for ${domain}`);
     if (this.sites().some((site) => site.domain === domain)) failAction(`${domain} is still a CloudPanel site`);
     const policy = this.files.policy();
+    if (policy.domains.includes(domain)) failAction(`${domain} is still a DNS-only domain`);
     const run = this.run(policy);
     await run.discover();
     if (run.zoneGone(entry)) return { run, entry, ids: [], published: [], plans: [], gone: true };
@@ -1756,7 +1781,7 @@ class Action {
 
   private mailcowSites(policy: Policy): string[] {
     const uses = (id: string | null | undefined) => policy.profiles.find((profile) => profile.role === "mail" && profile.id === id)?.mailcow;
-    const domains = new Set([...this.sites().map((site) => site.domain), ...this.redirectSources()]);
+    const domains = new Set(this.domainsOf(policy));
     return [...domains].filter((domain) => uses(policy.assignments[domain]?.mail));
   }
 }
@@ -1780,10 +1805,9 @@ function profileById(policy: Policy, id: unknown, role?: ProfileRole): Profile {
   return profile;
 }
 
-/** A redirect domain's stored HTTP profile waits until the redirect is gone, so it uses only its Mail profile. */
-function domainsUsing(policy: Policy, profile: Profile, redirects: Set<string>): string[] {
+function domainsUsing(policy: Policy, profile: Profile): string[] {
   return Object.entries(policy.assignments)
-    .filter(([domain, assigned]) => profile.role === "http" ? assigned.http === profile.id && !redirects.has(domain) : assigned.mail === profile.id)
+    .filter(([, assigned]) => profile.role === "http" ? assigned.http === profile.id : assigned.mail === profile.id)
     .map(([domain]) => domain);
 }
 
@@ -1804,11 +1828,11 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     action.checkProfile(profile);
     if (existing) next.profiles = next.profiles.map((candidate) => candidate.id === id ? profile : candidate);
     else next.profiles.push(profile);
-    return action.change(next, existing ? `Saved ${profile.name}.` : `Created ${profile.name}.`, domainsUsing(next, profile, action.redirectSources()));
+    return action.change(next, existing ? `Saved ${profile.name}.` : `Created ${profile.name}.`, domainsUsing(next, profile));
   }
   if (verb === "delete-profile") {
     const profile = profileById(policy, body.id);
-    const affected = domainsUsing(policy, profile, action.redirectSources());
+    const affected = domainsUsing(policy, profile);
     next.profiles = next.profiles.filter((candidate) => candidate.id !== profile.id);
     for (const [domain, assigned] of Object.entries(next.assignments)) {
       if (profile.role === "http" && assigned.http === profile.id) assigned.http = null;
@@ -1861,17 +1885,9 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     if (!hasHttp && !hasMail) failAction("Choose an HTTP or Mail role to assign");
     const domains = body.domains.map((domain) => hostname(domain, "a site"));
     const sites: string[] = [];
-    const redirects = action.redirectSources();
+    const dnsOnly = action.dnsOnlyDomains(policy);
     for (const domain of domains) {
-      if (redirects.has(domain)) {
-        if (hasHttp && httpId !== null) failAction(`${domain} is a redirect domain in Redirects; change its Mail role instead`);
-        if (!hasMail) continue;
-        const current = next.assignments[domain] ?? { http: null, mail: null };
-        if (current.http || mailId) next.assignments[domain] = { ...current, mail: mailId };
-        else delete next.assignments[domain];
-        continue;
-      }
-      sites.push(action.site(domain).domain);
+      if (!dnsOnly.includes(domain)) sites.push(action.site(domain).domain);
       const current = next.assignments[domain] ?? { http: null, mail: null };
       const updated = {
         http: hasHttp ? httpId : current.http,
@@ -1918,7 +1934,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   if (verb === "choose-zone") {
     const zone = hostname(body.zone, "the zone");
     next.zoneChoices[zone] = { connectionId: connectionId(body.connectionId), zoneId: providerId(body.zoneId, "the zone") };
-    const inZone = [...action.sites().map((site) => site.domain), ...action.redirectSources(), ...(next.panelHost ? [next.panelHost] : [])]
+    const inZone = [...action.domainsOf(next), ...(next.panelHost ? [next.panelHost] : [])]
       .filter((domain) => domain === zone || domain.endsWith(`.${zone}`));
     return action.change(next, `${zone} is managed through the chosen connection.`, inZone);
   }
@@ -1928,7 +1944,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     if (prepareOnly && !name) failAction("Enter the panel hostname");
     if (name && !policy.connections.length && !(policy.powerdns?.length ?? 0)) failAction("Add a DNS connection first");
     if (name && action.sites().some((site) => site.domain === name)) failAction(`${name} is a CloudPanel site; choose another name for the panel`);
-    if (name && action.redirectSources().has(name)) failAction(`${name} is a redirect domain in Redirects; choose another name for the panel`);
+    if (name && policy.domains.includes(name)) failAction(`${name} is a DNS-only domain; choose another name for the panel`);
     next.panelHost = name;
     if (!name) return action.removePanelHost(next);
     if (prepareOnly) return action.preparePanelHost(policy, next, name);
@@ -1936,6 +1952,28 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
       ? `DNS points ${name} at this server.`
       : `Saved ${name}. Turn on Automatic when you are ready for DNS to write the record.`;
     return action.change(next, notice, [name]);
+  }
+  if (verb === "add-domain") {
+    const domain = hostname(body.domain, "The domain");
+    if (action.sites().some((site) => site.domain === domain)) failAction(`${domain} is a CloudPanel site; it is already listed`);
+    if (policy.domains.includes(domain)) failAction(`${domain} is already listed`);
+    if (domain === policy.panelHost) failAction(`${domain} is the panel hostname`);
+    if (policy.domains.length >= MAX_DOMAINS) failAction(`At most ${MAX_DOMAINS} DNS-only domains can be added`);
+    const http = body.httpProfileId == null || body.httpProfileId === "" ? null : profileById(policy, body.httpProfileId, "http").id;
+    const mail = body.mailProfileId == null || body.mailProfileId === "" ? null : profileById(policy, body.mailProfileId, "mail").id;
+    next.domains.push(domain);
+    if (http || mail) next.assignments[domain] = { http, mail };
+    else delete next.assignments[domain];
+    next.held = next.held.filter((held) => held !== domain);
+    return action.change(next, `Added ${domain}.`, [domain]);
+  }
+  if (verb === "remove-domain") {
+    const domain = hostname(body.domain, "The domain");
+    if (!policy.domains.includes(domain)) failAction(`${domain} is not a DNS-only domain`);
+    next.domains = next.domains.filter((listed) => listed !== domain);
+    delete next.assignments[domain];
+    next.held = next.held.filter((held) => held !== domain);
+    return action.change(next, `Removed ${domain}. Its records are left in ${providerLabelFor(next)}.`);
   }
   if (verb === "save-server") {
     next.server = { ipv4: ipAddress(body.ipv4, 4, "The IPv4 address"), ipv6: ipAddress(body.ipv6, 6, "The IPv6 address") };
@@ -2050,6 +2088,7 @@ async function perform(
       const domain = hostname(body.domain, "the site");
       const managed = action.files.managed();
       if (action.sites().some((site) => site.domain === domain)) failAction(`${domain} is still a CloudPanel site`);
+      if (action.files.policy().domains.includes(domain)) failAction(`${domain} is still a DNS-only domain`);
       const entry = managed[domain];
       const provider = entry
         ? (entry.connectionId.startsWith("pdns-") ? PROVIDER_LABELS.powerdns : PROVIDER_LABELS.cloudflare)
