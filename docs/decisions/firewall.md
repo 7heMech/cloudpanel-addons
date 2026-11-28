@@ -268,9 +268,18 @@ as Terraform so upgrades and existing zones never duplicate rules when no
 competing rule overlaps the same target. Competing foreign rules are checked
 before accepting either a matching managed rule or an equivalent foreign rule,
 so an overlapping rule (such as a foreign ACME rule setting Flexible SSL beside
-Full SSL) holds the zone as a conflict instead of reporting it synced. When
+Full SSL) holds the zone as a conflict instead of reporting it synced. Since
+every host serves the ACME path, any enabled rule after the ACME rule that sets
+another SSL mode, even one matching a single hostname, also competes with it,
+including a lone foreign ACME rule Firewall would otherwise rewrite to Full;
+a new ACME rule is appended last, so earlier rules never compete. When
 applying a zone, rules are written before zone settings so the ACME Full SSL
-rule is in place before SSL switches to Full (strict). Only settings and phases
+rule is in place before SSL switches to Full (strict). Zones are planned from
+one read and applied one at a time, so each rule is read again just before it
+is updated or deleted; if its ref, action, expression, enabled state or
+parameters differ from the planning read (not from the ruleset an earlier
+write returned), nothing more is written to that zone and it
+shows an error until the next check plans from the current rule. Only settings and phases
 managed by the current or previous defaults, or by a tracked managed rule, are
 read, so a rule-only token without Zone Settings Edit or Zone WAF Edit does not
 hit 403 on unused endpoints. `cloudflare-edge-status.json` keeps managed-rule
@@ -296,8 +305,14 @@ read only local files and make zero Cloudflare API calls.
 2. **Approve once (`edge-save` with `approve: true` -> `edge-confirm`).** Root
    reads live Cloudflare zones, builds a review with a 15-minute random token
    and SHA-256 plan digest, and stores it in `cloudflare-edge-pending.json`.
-   Confirming re-reads live Cloudflare state, verifies both config hash and
-   plan digest (showing a fresh review if Cloudflare changed in between),
+   The digest also covers the zone, ruleset and rule IDs each change targets
+   and the live state of each rule it updates or deletes. Confirming re-reads
+   live Cloudflare state, verifies both config hash and plan digest (showing a
+   fresh review if Cloudflare changed in between, including a rule replaced
+   with an identical-looking one; when no connection can be read, approving
+   or updating defaults is refused, at preparation and at confirmation alike,
+   and with no saved connection at all every confirmation is refused and the
+   review kept),
    applies changes to non-blocked zones, records `approved: true` with
    `approvedDigest`, and logs each write.
 3. **Automatic inheritance for new zones.** While `approved` is true and
@@ -333,7 +348,10 @@ read only local files and make zero Cloudflare API calls.
 
 `Zone Settings: Edit`, `Config Rules: Edit`, and `Zone WAF: Edit` live in
 `lib/cloudflare/tokens.ts` as `edge` permissions: required on Firewall when the
-corresponding default is enabled and optional on DNS. The shared Connect
+corresponding default is enabled, or while `trackedManagedRules` still holds a
+rule the defaults no longer want (`pendingRuleCleanup`), since removing it
+needs the same edit; optional on DNS. `readFirewallEdgeNeeds` in
+`lib/cloudflare/store.ts` gives DNS, Redirects and Manager both. The shared Connect
 Cloudflare dialog offers independent checkboxes for DNS records, Cloudflare edge
 defaults, and Panel gate so operators can mint minimal or combined tokens.
 
@@ -347,7 +365,10 @@ profile still carrying a `zone` block or list of blocks, which DNS writes only
 from the v1 profiles in use. It sets `acmeFullSsl` when any relevant
 profile enabled it or `panelHost` was set, treats an unmanaged (`null` or
 omitted) SSL/TLS mode or Always Use HTTPS beside a set value as a disagreement
-(leaving the setting `null` with a `migrationNote` and `approved: false`), and
+(leaving the setting `null` with a `migrationNote` and `approved: false`),
+treats WAF skip lists that differ (including an empty list beside a non-empty
+one) as a disagreement too, keeping their union in the unapproved draft with a
+`migrationNote` since each legacy list applied only to its own zones, and
 refuses migration before writing or removing legacy state if the combined
 `skipFirewallIps` union exceeds `MAX_SKIP_IPS` (20). Unambiguous active options
 are marked `approved: true` only when DNS is enabled (`dns.conf` exists) and

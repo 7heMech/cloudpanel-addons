@@ -190,7 +190,8 @@ When the rule cannot be read (a connection failing discovery, an unreadable or
 unreachable tracked zone, two matching rules, rules in two zones, or another
 enabled rule matching the host by pattern), the plan carries that problem and
 the redirect is kept whole. A failed delete is recorded as a problem and retried
-on the next run.
+on the next run. A confirmed review counts only the redirects whose writes all
+succeeded as applied and names the others apart.
 
 ## Create Site notice
 
@@ -237,9 +238,9 @@ Upgrading from a release where DNS owned redirect domains runs
 `migrateRedirectsFromDns` (`addons/redirects/migration.ts`) under `dns.lock`,
 `redirects.lock`, and `cloudflare.lock` after
 `migrateCloudflareFromDns` and Firewall's Cloudflare edge migration. It validates every touched file with
-`isTrustedFile`, moves `redirects`, `standins.json`, redirect holds, tracked
-`redirectRules`, Cloudflare `zoneChoices`, and Cloudflare `connectionIds` into
-`/var/lib/clp-addons/redirects/`, hands each redirect's `profileId` with mail
+`isTrustedFile`, moves `redirects`, `standins.json`, redirect holds, and
+Cloudflare `zoneChoices` into `/var/lib/clp-addons/redirects/`, drops DNS's
+redirect plans from its `status.json`, hands each redirect's `profileId` with mail
 rows to DNS as a DNS-only domain with that Mail role (through DNS's own `upgradeSavedPolicy`, passed in by
 `cli/addons.ts` so Redirects never imports DNS), marks redirects that were
 on PowerDNS as `mode: "local"` while keeping their custom stand-in `hosts`, and

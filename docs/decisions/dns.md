@@ -145,14 +145,22 @@ deterministically without altering live DNS records:
   Mailcow") split into an HTTP profile and a Mail profile, deduplicating each
   half against existing profiles with the same `profileEffect`. An untouched,
   unused default "Web and Mailcow" profile on an unlinked install is dropped.
+- Web rows are A, AAAA and CNAME rows at `{domain}`, `www.{domain}` or
+  `*.{domain}` (`{sub}.{zone}` counts as `{domain}`) that use no `{mailcow.*}`
+  placeholder; a Mailcow-dependent row there stays in the Mail role, since
+  HTTP profiles refuse those placeholders.
 - For any v1 profile referenced by a redirect, all non-web rows (including
   custom TXT or CAA records) move into the Mail role and web rows stay in the
   HTTP role, so migrated redirects keep every custom record without copying web
-  rows.
+  rows. v1 redirects left out every address row at their own names, so when
+  the Mail half holds one, the redirect gets its own Mail profile without it.
 - Site assignments map from `profileId` to `{ http, mail }`, a redirect whose
   `profileId` has mail rows makes its source a DNS-only domain with
   `{ http: null, mail }` (a redirect with no mail adds nothing), and
   `defaultProfileId` maps to `defaultHttpProfileId` and `defaultMailProfileId`.
+- Splitting can leave more than the 48 profiles an operator may create (up to
+  three per v1 profile). The migrated policy loads and saves as it is; creating
+  a profile is refused until the operator deletes enough to go under 48.
 - If DNS saves a v2 `policy.json` before Firewall migrates legacy Cloudflare
   edge options, `legacyProfileZones` gives each migrated v2 HTTP and Mail
   profile the `zone` blocks of the v1 profiles folded into it, counting only
@@ -320,12 +328,9 @@ importing the addon and whether or not Redirects is enabled, for two things:
 
 Upgrading turns each redirect that had a mail profile into a DNS-only domain
 with that Mail role, through DNS's own `upgradeSavedPolicy` (which the Redirects
-migration is handed so it never imports DNS); v2 leftovers with a
-`mailProfileId` are read the same way, and a policy whose leftovers would
-take the DNS-only domains past `MAX_DOMAINS` fails to read rather than drop
-one. Until that migration has run, a DNS save keeps `redirects` in
-`policy.json` for it to read, without the Mail roles the save already holds,
-so each is imported once.
+migration is handed so it never imports DNS). Until that migration has run, a
+DNS save keeps the v1 `redirects` in `policy.json` for it to read; a v2 read
+ignores them, since the save already holds their Mail roles.
 
 ## Panel hostname
 
@@ -423,7 +428,8 @@ the token read its own permissions; it exposes token metadata, never a secret.
 Zone Edit is included for Automatic zone creation; Cloudflare refuses a zone
 create without it by naming `account.zone.create`, which the page reports as
 Zone Edit. Selecting Cloudflare edge defaults adds Zone Settings Edit, Config
-Rules Edit, and Zone WAF Edit (when WAF skip IPs are configured). Selecting
+Rules Edit, and Zone WAF Edit (when WAF skip IPs are configured, or a zone
+still holds the skip rule an emptied list removes). Selecting
 Panel gate adds SSL and Certificates Edit, Access: Apps and Policies Edit, and
 Access: Organizations, Identity Providers, and Groups Edit. The URL uses the
 keys in Cloudflare's
@@ -608,7 +614,9 @@ and its own address records at the site and `www`, are written at once with no
 review. If its profile would do more, such as update, delete or add beside an
 existing record at `*.{domain}` or another name, the site is held: its own
 address records are still written, and the rest waits, through every later
-check, until an administrator reviews it. While an apex site's wildcard waits
+check, until an administrator reviews it. That includes adding the site to the
+Mailcow shared mailbox's sender list, which alone never holds a site; Mailcow's
+domain and DKIM key are still made. While an apex site's wildcard waits
 for review, `www` is left out of its certificate names. Placing the site in a
 profile by hand, or the page's Review changes, runs the usual review and clears
 the hold. Readiness ignores the held changes. One read of the panel that finds
@@ -621,8 +629,9 @@ non-administrators: the action is told the panel user and refuses a site
 fixed one when a non-administrator's site has a problem, since a plan's problems
 can name other sites and quote provider errors), a pending or newly created zone
 with its provider, nameservers, and `zoneCreated` flag, and the certificate
-names only: the site and `www` where the profile writes an address there, or
-covers `www` through an unobstructed wildcard. A site in no profile, or any site
+names only: the site and `www` where the HTTP profile writes an address there,
+or covers `www` through an unobstructed wildcard; a Mail profile's address row
+never counts. A site in no profile, or any site
 while DNS asks first, is not DNS's to hold up.
 A non-administrator's call checks the DNS provider only for a site created in
 the last fifteen minutes; for an older one it answers from the last check, so
@@ -725,7 +734,10 @@ record values, including priority, proxy, TTL and comment. A settled enforcing
 entry handed off to a wildcard with no pending changes and no matched records of
 its own clears its tracked entry so it leaves no orphans. A site taken out of
 its profile, or every site when DNS goes back to Ask first, is forgotten there
-and then: its records are its own again. When CloudPanel no longer has such a
+and then: its records are its own again. A site that loses one role or moves
+to another profile in it keeps tracking only the records its profiles still
+write at (`recordsOwnedBy`), even when the provider cannot be read to refresh
+them; a TXT of no known kind counts only where a row writes that exact value. Editing a profile's rows keeps tracking what it wrote. When CloudPanel no longer has such a
 site, the page
 lists them; Remove plans the deletion of those
 still unchanged and at no name a current site writes or relies on, and deletes

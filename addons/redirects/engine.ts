@@ -638,6 +638,11 @@ export class RedirectsRun {
     this.failures.set(domain, [...this.failures.get(domain) ?? [], errorMessage(error)]);
   }
 
+  /** The redirects a write failed for in this run. */
+  failed(): string[] {
+    return [...this.failures.keys()];
+  }
+
   private logged(sites: string[], zone: string, action: LogEntry["action"], subject: string, detail: string, before?: string): void {
     this.log.push({ at: new Date().toISOString(), sites, zone, action, subject, detail, ...before !== undefined && { before } });
   }

@@ -802,22 +802,6 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect(both.review!.sites[0]!.problems.join(" ")).toContain("exist in more than one zone (go.sub.example.com, sub.example.com)");
   });
 
-  test("still reads a single tracked zone saved before zones were listed", async () => {
-    const env = setup();
-    env.cf.zone("example.com", env.account);
-    await env.act("save-connection", { token: TOKEN });
-    await env.automatic();
-    await env.confirmed(await env.act("save-redirect", found("go.example.com", "https://example.net")));
-    const statusFile = join(env.paths.stateDir, "status.json");
-    const status = JSON.parse(readFileSync(statusFile, "utf8"));
-    status.redirectRules["go.example.com"] = { connectionId: "cf-gone", zoneId: "9".repeat(32), zoneName: "ghost.example.com" };
-    writeFileSync(statusFile, JSON.stringify(status), { mode: 0o600 });
-
-    const blocked = await env.act("delete-redirect", { source: "go.example.com" });
-    expect(blocked.review!.blocked).toBe(true);
-    expect(blocked.review!.sites[0]!.problems.join(" ")).toContain("ghost.example.com, where the Cloudflare rule for go.example.com was last seen, is not reachable");
-  });
-
   test("holds a stand-in that gains a zone even when a refresh records the zoned plan first", async () => {
     const env = setup();
     env.cf.zone("other.example", env.account);
@@ -1113,6 +1097,23 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.sites.map((site) => site.domain)).toEqual(["ask.example"]);
   });
 
+  test("a confirmed replacement whose cleanup fails is reported apart from what applied, and kept", async () => {
+    const env = setup();
+    seededZone(env.cf, env.account, "part.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("part.example", "https://example.com")] }));
+    await env.act("set-automatic", { automatic: false });
+    env.sites.push({ id: 47, domain: "part.example", user: "part", selfSigned: false });
+
+    const review = await env.act("set-automatic", { automatic: true });
+    env.cf.failOn = (method, path) => method === "DELETE" && path.includes("/dns_records/");
+    const applied = await env.act("confirm", { token: review.review!.token });
+    expect(applied.notice).toContain("Applied to 0 redirects.");
+    expect(applied.notice).toContain("Could not finish part.example");
+    expect(applied.redirects.map((redirect) => redirect.source)).toEqual(["part.example"]);
+  });
+
   test("a reviewed replacement shows a fresh review when its rule was recreated, rather than deleting the new one", async () => {
     const env = setup();
     seededZone(env.cf, env.account, "swap.example", "https://example.com");
@@ -1381,9 +1382,10 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
     const dnsStatusText = `${JSON.stringify({
       checkedAt: "2026-11-01T00:00:00Z",
       connections: [],
-      connectionIds: ["cf-1", "pdns-1"],
-      redirectRules: { "cf-old.example": { connectionId: "cf-1", zoneId: "1".repeat(32), zoneName: "cf-old.example" } },
-      plans: {},
+      plans: {
+        "site.example.com": { domain: "site.example.com", zone: null },
+        "cf-old.example": { domain: "cf-old.example", redirect: true, zone: null },
+      },
     }, null, 2)}\n`;
     const standInsText = `${JSON.stringify({
       "pdns.sub.example": {
@@ -1418,9 +1420,7 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
     expect(migratedPolicy.zoneChoices).toEqual({ "cf-old.example": { connectionId: "cf-1", zoneId: "1".repeat(32) } });
     expect(migratedPolicy.held).toEqual(["cf-old.example"]);
 
-    const migratedStatus = JSON.parse(readFileSync(join(redirectsDir, "status.json"), "utf8"));
-    expect(migratedStatus.connectionIds).toEqual(["cf-1"]);
-    expect(migratedStatus.redirectRules).toEqual({ "cf-old.example": { connectionId: "cf-1", zoneId: "1".repeat(32), zoneName: "cf-old.example" } });
+    expect(existsSync(join(redirectsDir, "status.json"))).toBe(false);
     expect(readFileSync(join(redirectsDir, "standins.json"), "utf8")).toBe(standInsText);
 
     // DNS state cleaned while keeping sites, profiles, and PowerDNS intact.
@@ -1429,6 +1429,7 @@ describe("migration from addons/dns and DNS stand-in exclusion", () => {
     expect(cleanedDnsPolicy.assignments).toEqual({ "site.example.com": "web" });
     expect(cleanedDnsPolicy.held).toEqual(["site.example.com"]);
     expect(cleanedDnsPolicy.powerdns).toHaveLength(1);
+    expect(Object.keys(JSON.parse(readFileSync(join(dnsDir, "status.json"), "utf8")).plans)).toEqual(["site.example.com"]);
     expect(existsSync(join(dnsDir, "standins.json"))).toBe(false);
 
     // Second run is a no-op.

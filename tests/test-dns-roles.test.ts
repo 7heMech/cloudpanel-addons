@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { executeDnsAction, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { dashboardContent } from "../addons/dns/app/views";
 import type { PanelSite } from "../addons/dns/engine";
-import { composeProfiles, MAX_DOMAINS, MAX_PROFILES, parsePolicy, parseProfile } from "../addons/dns/model";
+import { composeProfiles, MAX_PROFILES, parsePolicy, parseProfile } from "../addons/dns/model";
 import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
 import { renderProfile } from "../addons/dns/records";
 import { readEdgeConfig } from "../addons/firewall/edge";
@@ -50,12 +50,16 @@ function setup() {
     rootUid: process.getuid!(),
     clpctl: "/bin/false",
   };
+  const outage = { cloudflare: false };
+  const fetch = routed(cf, mc);
   const act = <T = DnsReply>(verb: string, body?: unknown, extra: string[] = []): Promise<T> =>
     executeDnsAction([verb, ...extra], {
       paths,
       processUid: 0,
       input: body === undefined ? undefined : JSON.stringify(body),
-      fetch: routed(cf, mc),
+      fetch: (address, init) => outage.cloudflare && String(address).includes("cloudflare")
+        ? Promise.resolve(new Response(JSON.stringify({ success: false, errors: [{ code: 500, message: "Upstream outage" }] }), { status: 503 }))
+        : fetch(address, init),
       sites: () => sites,
       addresses: () => ({ ...addresses }),
       now: () => START,
@@ -87,7 +91,7 @@ function setup() {
       plans: Object.fromEntries(redirectSources.map(({ source }) => [source, {
         domain: source, mode: "enforce", zone: edge.includes(source) ? view : null, changes: [], problems: [], zoneChoices: [],
       }])),
-      redirectRules: Object.fromEntries(tracked.map((source) => [source, { connectionId: "cf-1", zoneId: "z", zoneName: "example.org" }])),
+      redirectRules: Object.fromEntries(tracked.map((source) => [source, [{ connectionId: "cf-1", zoneId: "z", zoneName: "example.org" }]])),
     }), { mode: 0o600 });
   };
   const addDomain = (domain: string, roles: { httpProfileId?: string | null; mailProfileId?: string | null } = {}) =>
@@ -98,7 +102,7 @@ function setup() {
   };
   const records = (zone = "example.com") =>
     cf.recordsOf(zone).map((record) => `${record.type} ${record.name} ${record.content}${record.proxied ? " proxied" : ""}`).sort();
-  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, redirectStatus, addDomain };
+  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, redirectStatus, addDomain, outage };
 }
 
 function mailcowPanelHtml(html: string): string {
@@ -203,6 +207,27 @@ describe("composable HTTP and Mail roles", () => {
     expect(deleted.sites.find((s) => s.domain === "example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: null });
   });
 
+  test("a Mail profile's address row does not make an empty HTTP role ready for a certificate", async () => {
+    const env = setup();
+    await env.connect();
+    const empty = await env.act("save-profile", { name: "Empty HTTP", role: "http", mailcow: false, records: [] });
+    const httpId = empty.profiles.find((p) => p.name === "Empty HTTP")!.id;
+    const withAddress = await env.act("save-profile", {
+      name: "Mail with address", role: "mail", mailcow: false,
+      records: [
+        { type: "A", name: "{domain}", content: "{ipv4}", ttl: 1 },
+        { type: "MX", name: "{domain}", content: "mx.example.net", priority: 10, ttl: 1 },
+      ],
+    });
+    const mailId = withAddress.profiles.find((p) => p.name === "Mail with address")!.id;
+    await env.act("assign", { domains: ["mail.example.com"], httpProfileId: httpId, mailProfileId: mailId });
+    await env.apply("set-automatic", { automatic: true });
+    expect(env.records()).toContain("A mail.example.com 203.0.113.10");
+
+    const reply = await env.act<ProvisionReply>("provision", undefined, ["--domain=mail.example.com", "--ssl"]);
+    expect(reply).toMatchObject({ managed: true, ready: false, reason: "The HTTP role manages no address for this site", certificateNames: [] });
+  });
+
   test("DNS-only site with a Mail role returns managed: false for SSL provisioning and applies Mail on admin provision", async () => {
     const env = setup();
     await env.connect();
@@ -237,6 +262,50 @@ describe("composable HTTP and Mail roles", () => {
     expect(state.sites.find((s) => s.domain === "fresh.example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc" });
     expect(state.sites.find((s) => s.domain === "example.com")).toMatchObject({ httpRole: "dns-only", httpProfileId: null, mailProfileId: null });
     expect(env.records("example.com")).toContain("A fresh.example.com 203.0.113.10 proxied");
+  });
+});
+
+describe("tracked records follow the roles", () => {
+  test("deleting the HTTP profile while Cloudflare is down stops tracking its records but keeps Mail's", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "google" });
+    await env.apply("set-automatic", { automatic: true });
+    const tracked = () => {
+      const managed = JSON.parse(readFileSync(join(env.dir, "state", "managed.json"), "utf8"));
+      return (managed["example.com"]?.records ?? []).map((record: { type: string; name: string }) => `${record.type} ${record.name}`).sort();
+    };
+    expect(tracked()).toContain("A example.com");
+    expect(tracked()).toContain("MX example.com");
+
+    env.outage.cloudflare = true;
+    await env.act("delete-profile", { id: "web" });
+    expect(tracked().filter((record: string) => /^(A|AAAA|CNAME) /.test(record))).toEqual([]);
+    expect(tracked()).toContain("MX example.com");
+    expect(tracked()).toContain("TXT example.com");
+  });
+
+  test("deleting the HTTP profile keeps tracking a custom TXT that the Mail profile still writes", async () => {
+    const env = setup();
+    await env.connect();
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    await env.act("save-profile", { name: "Verify", role: "mail", mailcow: false, records: [
+      row("MX", "{domain}", "mx.example.net", 10),
+      row("TXT", "_verify.{domain}", "token=abc"),
+    ] });
+    await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "verify" });
+    await env.apply("set-automatic", { automatic: true });
+    const tracked = () => {
+      const managed = JSON.parse(readFileSync(join(env.dir, "state", "managed.json"), "utf8"));
+      return (managed["example.com"]?.records ?? []).map((record: { type: string; name: string; content: string }) => `${record.type} ${record.name} ${record.content}`);
+    };
+    expect(tracked()).toContain("TXT _verify.example.com token=abc");
+
+    env.outage.cloudflare = true;
+    await env.act("delete-profile", { id: "web" });
+    expect(tracked().filter((record: string) => record.startsWith("A "))).toEqual([]);
+    expect(tracked()).toContain("TXT _verify.example.com token=abc");
   });
 });
 
@@ -583,6 +652,94 @@ describe("v1 to v2 policy migration", () => {
     expect(migrated.profiles.find((p) => p.id === "verify-tag")!.role).toBe("mail");
     expect(migrated.assignments["old.example.org"]).toEqual({ http: null, mail: "verify-tag" });
   });
+
+  test("keeps Mailcow-dependent web-name rows in Mail and leaves them off a redirect", () => {
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    const shared = {
+      id: "web-mail", name: "Web and Mail", mailcow: true,
+      records: [
+        row("A", "{domain}", "{ipv4}"),
+        row("CNAME", "www.{domain}", "{mailcow.host}"),
+        row("MX", "{domain}", "{mailcow.host}", 10),
+      ],
+    };
+    const migrated = parsePolicy({
+      version: 1, automatic: false, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null,
+      mailcow: { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+      profiles: [shared],
+      assignments: { "example.com": "web-mail" },
+      redirects: [{ source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, profileId: "web-mail" }],
+    });
+    expect(parsePolicy(migrated)).toEqual(migrated);
+    const byId = (id: string | null) => migrated.profiles.find((p) => p.id === id)!;
+    const site = migrated.assignments["example.com"]!;
+    expect(byId(site.http).records.map((r) => `${r.type} ${r.name}`)).toEqual(["A {domain}"]);
+    expect(byId(site.mail).records.map((r) => `${r.type} ${r.name}`)).toEqual(["CNAME www.{domain}", "MX {domain}"]);
+    const redirect = migrated.assignments["old.example.org"]!;
+    expect(redirect.http).toBeNull();
+    expect(byId(redirect.mail).records.map((r) => `${r.type} ${r.name}`)).toEqual(["MX {domain}"]);
+    expect(byId(redirect.mail).mailcow).toBe(true);
+  });
+
+  test("migrates a released v1 policy that splits into more than MAX_PROFILES, and only blocks creating more", async () => {
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    const legacy = Array.from({ length: 24 }, (_, i) => ({
+      id: `web-mail-${i}`, name: `Web and Mail ${i}`, mailcow: true,
+      records: [
+        row("A", "{domain}", `203.0.113.${i + 1}`),
+        row("CNAME", "www.{domain}", "{mailcow.host}"),
+        row("TXT", "_tag.{domain}", `v=${i}`),
+      ],
+    }));
+    const v1 = {
+      version: 1, automatic: false, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null,
+      mailcow: { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+      profiles: legacy,
+      assignments: Object.fromEntries(legacy.map((profile, i) => [`site${i}.example.com`, profile.id])),
+      redirects: legacy.map((profile, i) => ({ source: `old${i}.example.org`, target: "https://example.com", status: 301, keepPath: true, keepQuery: true, profileId: profile.id })),
+    };
+    const migrated = parsePolicy(v1);
+    expect(migrated.profiles).toHaveLength(72);
+    expect(parsePolicy(migrated)).toEqual(migrated);
+    const redirectMail = migrated.profiles.find((p) => p.id === migrated.assignments["old3.example.org"]!.mail)!;
+    expect(redirectMail.records.map((r) => `${r.type} ${r.name} ${r.content}`)).toEqual(["TXT _tag.{domain} v=3"]);
+    expect(redirectMail.mailcow).toBe(true);
+
+    const env = setup();
+    await env.connect();
+    mkdirSync(join(env.dir, "state"), { recursive: true });
+    writeFileSync(join(env.dir, "state", "policy.json"), JSON.stringify(v1), { mode: 0o600 });
+    await expect(env.act("save-profile", { name: "One More", role: "mail", mailcow: false, records: [row("TXT", "_more.{domain}", "x")] }))
+      .rejects.toThrow(`At most ${MAX_PROFILES} profiles can be created`);
+    const renamed = await env.act("save-profile", { ...redirectMail, name: "Renamed" });
+    expect(renamed.profiles).toHaveLength(72);
+  });
+
+  test("treats {sub}.{zone} address rows as web rows when splitting a v1 profile", () => {
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    const base = {
+      version: 1, automatic: false, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+      zoneChoices: {}, server: { ipv4: "", ipv6: "" }, panelHost: null, redirects: [],
+      mailcow: { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" },
+    };
+    const migrated = parsePolicy({
+      ...base,
+      profiles: [
+        { id: "shop", name: "Shop", mailcow: false, records: [row("A", "{sub}.{zone}", "{ipv4}"), row("MX", "{domain}", "mx.example.net", 10)] },
+        { id: "autodiscover", name: "Autodiscover", mailcow: false, records: [row("CNAME", "autodiscover.{domain}", "mail.example.net")] },
+      ],
+      assignments: { "shop.example.com": "shop", "example.org": "autodiscover" },
+    });
+    const shop = migrated.assignments["shop.example.com"]!;
+    expect(migrated.profiles.find((p) => p.id === shop.http)!.records.map((r) => `${r.type} ${r.name}`)).toEqual(["A {sub}.{zone}"]);
+    expect(migrated.profiles.find((p) => p.id === shop.mail)!.records.map((r) => `${r.type} ${r.name}`)).toEqual(["MX {domain}"]);
+    expect(migrated.assignments["example.org"]).toEqual({ http: null, mail: "autodiscover" });
+  });
 });
 
 describe("Mailcow hide-until-linked tab and removal warning flow", () => {
@@ -833,7 +990,7 @@ describe("review regressions", () => {
       ssl: "full", alwaysHttps: false, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: ["203.0.113.7"],
     });
 
-    // Firewall edge migration reads the v2 redirect's active mailProfileId and migrates its legacy zone options.
+    // Firewall edge migration reads the zone options DNS's save carried onto the redirect's v2 Mail profile.
     const fwStateDir = join(env.dir, "firewall-state");
     const uid = process.getuid!();
     const undo = migrateCloudflareEdgeFromDns(() => {}, {
@@ -960,46 +1117,5 @@ describe("review regressions", () => {
     expect(linked.profiles.some((profile) => profile.mailcow)).toBe(false);
     expect(linked.notice).toContain(`All ${MAX_PROFILES} profile slots are in use`);
     expect(linked.notice).toContain("delete an unused profile");
-  });
-
-  test("v2 leftovers of DNS's redirects with mail become DNS-only domains; those without mail add nothing", () => {
-    const policy = parsePolicy({
-      ...seededPolicy(),
-      assignments: { "example.com": { http: "web", mail: null } },
-      redirects: [
-        { source: "old.example.org", target: "https://example.com", mailProfileId: "google" },
-        { source: "plain.example.org", target: "https://example.com", mailProfileId: null },
-        { source: "example.com", target: "https://example.net", mailProfileId: "dmarc" },
-      ],
-    });
-    expect(policy.domains).toEqual(["old.example.org"]);
-    expect(policy.assignments).toEqual({ "example.com": { http: "web", mail: null }, "old.example.org": { http: null, mail: "google" } });
-  });
-
-  test("a v2 leftover's Mail role is imported once: removing its domain sticks, and the redirect stays for Redirects' migration", async () => {
-    const env = setup();
-    await env.connect();
-    await env.act("set-automatic", { automatic: false });
-    const policyPath = join(env.dir, "state", "policy.json");
-    const saved = JSON.parse(readFileSync(policyPath, "utf8"));
-    const leftover = { source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "google" };
-    rmSync(policyPath);
-    writeFileSync(policyPath, JSON.stringify({ ...saved, redirects: [leftover] }), { mode: 0o600 });
-    expect((await env.act("list")).sites.find((s) => s.domain === "old.example.org")).toMatchObject({ type: "domain", mailProfileId: "google" });
-
-    const removed = await env.act("remove-domain", { domain: "old.example.org" });
-    expect(removed.sites.some((s) => s.domain === "old.example.org")).toBe(false);
-    expect((await env.act("list")).sites.some((s) => s.domain === "old.example.org")).toBe(false);
-    const onDisk = JSON.parse(readFileSync(policyPath, "utf8"));
-    const { mailProfileId: _imported, ...kept } = leftover;
-    expect(onDisk.redirects).toEqual([kept]);
-    expect(onDisk.domains).toEqual([]);
-  });
-
-  test("v2 leftovers' Mail roles that do not fit in the DNS-only domains stop the read rather than being dropped", () => {
-    const listed = Array.from({ length: MAX_DOMAINS }, (_, index) => `d${index}.example.net`);
-    const leftover = { source: "old.example.org", target: "https://example.com", mailProfileId: "google" };
-    expect(() => parsePolicy({ ...seededPolicy(), domains: listed, redirects: [leftover] })).toThrow("do not fit");
-    expect(parsePolicy({ ...seededPolicy(), domains: listed.slice(1), redirects: [leftover] }).domains).toContain("old.example.org");
   });
 });

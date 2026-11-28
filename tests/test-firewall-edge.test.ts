@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   DEFAULT_EDGE_DEFAULTS, EMPTY_EDGE_DEFAULTS, parseEdgeDefaults, planZoneEdge, type EdgeDefaults,
 } from "../lib/cloudflare/edge";
-import { cloudflareConnectionViews, saveCloudflareConnection, type CloudflareStorePaths } from "../lib/cloudflare/store";
+import { cloudflareConnectionViews, removeCloudflareConnection, saveCloudflareConnection, type CloudflareStorePaths } from "../lib/cloudflare/store";
 import {
   checkCloudflareEdge, chooseCloudflareEdgeZone, confirmCloudflareEdge, edgeActionNeeded, edgePageView,
   edgeSetupCheck, readEdgeConfig, reconcileCloudflareEdge, reviewCloudflareEdgeZone, saveCloudflareEdge,
@@ -268,6 +268,36 @@ describe("Cloudflare edge planner (lib/cloudflare/edge.ts)", () => {
     expect(equivalentAlone.changes).toEqual([]);
     expect(equivalentAlone.conflicts).toEqual([]);
   });
+
+  test("treats a later hostname-only rule that sets another SSL mode as competing with the ACME rule", () => {
+    const acme = (ref: string) => ({
+      id: hexId(), ref, action: "set_config", enabled: true,
+      expression: 'starts_with(http.request.uri.path, "/.well-known/acme-challenge/")',
+      description: "ACME", action_parameters: { ssl: "full" },
+    });
+    const host = (ssl: string) => ({
+      id: hexId(), ref: "blog_ssl", action: "set_config", enabled: true,
+      expression: 'http.host eq "blog.example.com"', description: "Blog SSL", action_parameters: { ssl },
+    });
+    const plan = (rules: Record<string, unknown>[]) => planZoneEdge(DEFAULT_EDGE_DEFAULTS, {
+      settings: { ssl: "strict", always_use_https: "on" },
+      rulesets: { http_config_settings: { id: hexId(), rules: rules as never } },
+    });
+    for (const ref of ["clp_fw_acme", "tf_acme"]) {
+      const after = plan([acme(ref), host("strict")]);
+      expect(after.changes).toEqual([]);
+      expect(after.conflicts).toHaveLength(1);
+      expect(after.conflicts[0]).toContain("Blog SSL");
+      expect(plan([host("strict"), acme(ref)]).conflicts).toEqual([]);
+      expect(plan([acme(ref), host("full")]).conflicts).toEqual([]);
+    }
+    const flexible = { ...acme("dash_acme"), description: "Dashboard ACME", action_parameters: { ssl: "flexible" } };
+    const blocked = plan([flexible, host("flexible")]);
+    expect(blocked.changes).toEqual([]);
+    expect(blocked.conflicts).toHaveLength(1);
+    expect(blocked.conflicts[0]).toContain("Blog SSL");
+    expect(plan([flexible]).changes).toEqual([expect.objectContaining({ target: "acme", action: "update", conflict: true })]);
+  });
 });
 
 describe("Firewall approve-once Cloudflare edge defaults", () => {
@@ -433,6 +463,137 @@ describe("Firewall approve-once Cloudflare edge defaults", () => {
     const zoneAfterPause = env.cf.zone("paused.example", env.agency);
     expect(await reconcileCloudflareEdge(env.options)).toBeNull();
     expect(env.cf.settings.get(`${zoneAfterPause.id}:ssl`)).toBeUndefined();
+  });
+
+  test("a review to delete a managed rule re-prompts when Cloudflare replaced that rule before confirmation", async () => {
+    const env = makeEnv();
+    const zone = env.cf.zone("swap.example", env.agency);
+    await env.connect();
+    const approve = await saveCloudflareEdge({ approve: true, defaults: DEFAULT_EDGE_DEFAULTS }, env.options);
+    await confirmCloudflareEdge(approve.review!.token, env.options);
+    const key = `${zone.id}:http_config_settings`;
+    const original = env.cf.rulesets.get(key)!.rules[0]!;
+
+    const review = await saveCloudflareEdge({ defaults: { ...DEFAULT_EDGE_DEFAULTS, acmeFullSsl: false } }, env.options);
+    expect(review.review!.zones[0]!.changes.some((c) => c.action === "delete")).toBe(true);
+    const replacement = { ...original, id: hexId(), description: "Replaced elsewhere" };
+    env.cf.rulesets.get(key)!.rules = [replacement];
+
+    const writesBefore = env.cf.writes().length;
+    const retried = await confirmCloudflareEdge(review.review!.token, env.options);
+    expect(retried.review).toBeDefined();
+    expect(env.cf.writes().length).toBe(writesBefore);
+    expect(env.cf.rulesets.get(key)!.rules.map((rule) => rule.id)).toEqual([replacement.id]);
+
+    await confirmCloudflareEdge(retried.review!.token, env.options);
+    expect(env.cf.rulesets.get(key)!.rules).toEqual([]);
+  });
+
+  test("never writes a planned WAF skip list over a rule Cloudflare changed after it was read", async () => {
+    const env = makeEnv();
+    const zoneA = env.cf.zone("alpha.example", env.agency);
+    const zoneB = env.cf.zone("beta.example", env.agency);
+    await env.connect();
+    const approve = await saveCloudflareEdge({ approve: true, defaults: { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7"] } }, env.options);
+    await confirmCloudflareEdge(approve.review!.token, env.options);
+
+    const skipKey = (id: string) => `${id}:http_request_firewall_custom`;
+    let firstWrite: string | null = null;
+    const wrapped: EdgeOptions = {
+      ...env.options,
+      fetch: async (address, init) => {
+        const path = new URL(String(address)).pathname;
+        const response = await env.cf.fetch(address, init);
+        if (!firstWrite && init?.method === "PATCH" && path.includes("/rules/")) {
+          firstWrite = path.includes(zoneA.id) ? zoneA.id : zoneB.id;
+          const other = env.cf.rulesets.get(skipKey(firstWrite === zoneA.id ? zoneB.id : zoneA.id))!;
+          other.rules = other.rules.map((rule) => ({ ...rule, expression: "ip.src in {203.0.113.7 198.51.100.9}" }));
+        }
+        return response;
+      },
+    };
+    const review = await saveCloudflareEdge({ defaults: { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7", "203.0.113.8"] } }, wrapped);
+    await confirmCloudflareEdge(review.review!.token, wrapped);
+
+    const otherId = firstWrite === zoneA.id ? zoneB.id : zoneA.id;
+    expect(env.cf.rulesets.get(skipKey(firstWrite!))!.rules[0]!.expression).toBe("ip.src in {203.0.113.7 203.0.113.8}");
+    expect(env.cf.rulesets.get(skipKey(otherId))!.rules[0]!.expression).toBe("ip.src in {203.0.113.7 198.51.100.9}");
+    const other = edgePageView(env.options).zones.find((zone) => zone.zoneId === otherId)!;
+    expect(other.status).toBe("error");
+    expect(other.error).toContain("WAF skip rule changed in Cloudflare");
+  });
+
+  test("never writes a planned rule over one Cloudflare changed after planning, even when an earlier write returned the change", async () => {
+    const env = makeEnv();
+    const zone = env.cf.zone("gamma.example", env.agency);
+    await env.connect();
+    const both = { ...DEFAULT_EDGE_DEFAULTS, webmailFullSsl: true };
+    const approve = await saveCloudflareEdge({ approve: true, defaults: both }, env.options);
+    await confirmCloudflareEdge(approve.review!.token, env.options);
+    const key = `${zone.id}:http_config_settings`;
+    expect(env.cf.rulesets.get(key)!.rules).toHaveLength(2);
+    env.cf.rulesets.get(key)!.rules = env.cf.rulesets.get(key)!.rules.map((rule) => ({ ...rule, enabled: false }));
+
+    let firstId: string | null = null;
+    const wrapped: EdgeOptions = {
+      ...env.options,
+      fetch: async (address, init) => {
+        const path = new URL(String(address)).pathname;
+        if (!firstId && init?.method === "PATCH" && path.includes("/rules/")) {
+          firstId = path.split("/").pop()!;
+          const ruleset = env.cf.rulesets.get(key)!;
+          ruleset.rules = ruleset.rules.map((rule) => rule.id === firstId ? rule : { ...rule, description: "Edited elsewhere", expression: `${rule.expression} and true` });
+        }
+        return env.cf.fetch(address, init);
+      },
+    };
+    const review = await saveCloudflareEdge({ defaults: both }, wrapped);
+    expect(review.review!.zones[0]!.changes.filter((change) => change.action === "update")).toHaveLength(2);
+    await confirmCloudflareEdge(review.review!.token, wrapped);
+
+    const other = env.cf.rulesets.get(key)!.rules.find((rule) => rule.id !== firstId)!;
+    expect(String(other.expression)).toEndWith(" and true");
+    expect(other.enabled).toBe(false);
+    const view = edgePageView(env.options).zones.find((entry) => entry.zoneId === zone.id)!;
+    expect(view.status).toBe("error");
+    expect(view.error).toContain("changed in Cloudflare");
+  });
+
+  test("confirming after the last Cloudflare connection is removed neither renews the review nor approves", async () => {
+    const env = makeEnv();
+    env.cf.zone("solo.example", env.agency);
+    const connected = await env.connect();
+    const review = await saveCloudflareEdge({ approve: true, defaults: DEFAULT_EDGE_DEFAULTS }, env.options);
+    expect(review.review!.zones.length).toBe(1);
+    await removeCloudflareConnection(connected.id, { paths: env.cfPaths });
+
+    await expect(confirmCloudflareEdge(review.review!.token, env.options)).rejects.toThrow("Connect Cloudflare first");
+    await expect(confirmCloudflareEdge(review.review!.token, env.options)).rejects.toThrow("Connect Cloudflare first");
+    expect(readEdgeConfig(env.options).approved).toBe(false);
+  });
+
+  test("confirming an approval while Cloudflare cannot be read neither renews the review nor approves", async () => {
+    const env = makeEnv();
+    const zone = env.cf.zone("down.example", env.agency);
+    await env.connect();
+    const review = await saveCloudflareEdge({ approve: true, defaults: DEFAULT_EDGE_DEFAULTS }, env.options);
+    expect(review.review!.zones.length).toBe(1);
+
+    let down = true;
+    const wrapped: EdgeOptions = {
+      ...env.options,
+      fetch: async (address, init) => down
+        ? new Response(JSON.stringify({ success: false, errors: [{ code: 500, message: "Upstream outage" }] }), { status: 503 })
+        : env.cf.fetch(address, init),
+    };
+    await expect(confirmCloudflareEdge(review.review!.token, wrapped)).rejects.toThrow("Cloudflare could not be read");
+    await expect(confirmCloudflareEdge(review.review!.token, wrapped)).rejects.toThrow("Cloudflare could not be read");
+    expect(readEdgeConfig(env.options).approved).toBe(false);
+
+    down = false;
+    await confirmCloudflareEdge(review.review!.token, wrapped);
+    expect(readEdgeConfig(env.options).approved).toBe(true);
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBe("strict");
   });
 
   test("disambiguates duplicate zone names across two Cloudflare accounts", async () => {
@@ -787,8 +948,8 @@ describe("Upgrade migration from DNS profile zone options", () => {
       assignments: { "example.com": "web-mailcow" },
       panelHost: "panel.example.com",
       profiles: [
-        { id: "web", name: "Web", records: [], mailcow: false, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } },
-        { id: "web-mailcow", name: "Web and Mailcow", records: [], mailcow: true, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: true, skipFirewallIps: ["2001:db8::1"] } },
+        { id: "web", name: "Web", records: [], mailcow: false, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["2001:db8::1", "203.0.113.7"] } },
+        { id: "web-mailcow", name: "Web and Mailcow", records: [], mailcow: true, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: true, skipFirewallIps: ["203.0.113.7", "2001:db8::1"] } },
         { id: "unused", name: "Unused", records: [], mailcow: false, zone: { ssl: "flexible", alwaysHttps: false, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] } },
       ],
     }, null, 2)}\n`;
@@ -888,7 +1049,7 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(migrated.migrationNote).toContain("Always Use HTTPS");
   });
 
-  test("refuses skipFirewallIps overflow above 20 without modifying dns/policy.json, while migrating unions of 20 normally", () => {
+  test("refuses skipFirewallIps overflow above 20 without modifying dns/policy.json, while migrating 20", () => {
     const { paths } = setupMigrationDir();
     writeFileSync(paths.dnsConfig, "enabled\n");
     writeFileSync(join(paths.cloudflareStateDir, "connections.json"), JSON.stringify({
@@ -911,7 +1072,7 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(readFileSync(paths.dnsPolicy, "utf8")).toBe(overflowPolicy);
     expect(existsSync(paths.edgeConfig)).toBe(false);
 
-    // Trimming to 20 distinct IPs migrates normally.
+    // Trimming to 20 distinct IPs migrates, but the combined list of two different ones waits for approval.
     const exact20Policy = JSON.stringify({
       version: 1,
       automatic: true,
@@ -926,7 +1087,39 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(undo).not.toBeNull();
     const migrated = readEdgeConfig({ paths: { stateDir: paths.firewallStateDir, rootUid: uid } });
     expect(migrated.defaults.skipFirewallIps).toHaveLength(20);
-    expect(migrated.approved).toBe(true);
+    expect(migrated.approved).toBe(false);
+    expect(migrated.migrationNote).toContain("different WAF skip lists");
+  });
+
+  test("does not approve a combined WAF skip list when legacy profiles listed different IPs, or none beside some", () => {
+    const migrate = (lists: string[][]) => {
+      const { paths } = setupMigrationDir();
+      writeFileSync(paths.dnsConfig, "enabled\n");
+      writeFileSync(paths.firewallConfig, "enabled\n");
+      writeFileSync(join(paths.cloudflareStateDir, "connections.json"), JSON.stringify({
+        version: 1, connections: [{ id: "cf-1111aaaa", label: "Agency" }],
+      }), { mode: 0o600 });
+      writeFileSync(paths.dnsPolicy, JSON.stringify({
+        version: 1,
+        automatic: true,
+        assignments: Object.fromEntries(lists.map((_, i) => [`s${i}.example`, `p${i}`])),
+        profiles: lists.map((skipFirewallIps, i) => ({
+          id: `p${i}`, name: `P${i}`, records: [], mailcow: false,
+          zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps },
+        })),
+      }), { mode: 0o600 });
+      migrateCloudflareEdgeFromDns(() => {}, { ...paths, firewallWasEnabled: true });
+      return readEdgeConfig({ paths: { stateDir: paths.firewallStateDir, rootUid: uid } });
+    };
+    const different = migrate([["203.0.113.7"], ["198.51.100.9"]]);
+    expect(different.approved).toBe(false);
+    expect(different.defaults.skipFirewallIps).toEqual(["198.51.100.9", "203.0.113.7"]);
+    expect(different.migrationNote).toContain("different WAF skip lists");
+    expect(migrate([["203.0.113.7"], []]).approved).toBe(false);
+    const same = migrate([["203.0.113.7"], ["203.0.113.7"]]);
+    expect(same.approved).toBe(true);
+    expect(same.migrationNote).toBeNull();
+    expect(migrate([[], []]).approved).toBe(true);
   });
 
   test("does not approve migrated defaults when DNS was disabled even if policy.json had automatic: true", () => {
@@ -963,19 +1156,20 @@ describe("Upgrade migration from DNS profile zone options", () => {
     }), { mode: 0o600 });
 
     // v2 policy where an active site combines a legacy-zone HTTP profile with a new zone-less Mail profile,
-    // and an active redirect references a split Mail profile carrying legacy `ssl: "full"`. DNS's v2 save writes `zone`
-    // only from v1 profiles in use, so the unused `web` profile has none.
+    // and the redirect's domain has a split Mail profile carrying legacy `ssl: "full"`; the v1 redirect DNS's save
+    // kept for Redirects still names its v1 profile. DNS's v2 save writes `zone` only from v1 profiles in use,
+    // so the unused `web` profile has none.
     writeFileSync(paths.dnsPolicy, JSON.stringify({
       version: 2,
       automatic: true,
       defaultHttpProfileId: null,
       defaultMailProfileId: null,
-      assignments: { "site.example.com": { http: "custom-http", mail: "google" } },
-      redirects: [{ source: "old.example.org", target: "https://site.example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "redirect-mail" }],
+      assignments: { "site.example.com": { http: "custom-http", mail: "google" }, "old.example.org": { http: null, mail: "redirect-mail" } },
+      redirects: [{ source: "old.example.org", target: "https://site.example.com", status: 301, keepPath: true, keepQuery: true, profileId: "redirect" }],
       profiles: [
         { id: "web", name: "Web", role: "http", records: [], mailcow: false },
         { id: "custom-http", name: "Custom HTTP", role: "http", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } },
-        { id: "redirect-mail", name: "Redirect Mail", role: "mail", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: [] } },
+        { id: "redirect-mail", name: "Redirect Mail", role: "mail", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: ["203.0.113.7"] } },
         { id: "google", name: "Google Workspace", role: "mail", records: [], mailcow: false },
       ],
     }), { mode: 0o600 });

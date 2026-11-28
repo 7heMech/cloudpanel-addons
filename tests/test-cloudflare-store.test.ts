@@ -7,11 +7,11 @@ import { cloudflareAccessDetailsHtml } from "../lib/cloudflare/connect-dialog";
 import {
   checkCloudflareConnections, cloudflareConnectionViews, cloudflareTokenHolds, hasSharedCloudflareStore,
   legacyDnsCloudflarePending, listCloudflareSecrets, MAX_CLOUDFLARE_CONNECTIONS, migrateCloudflareFromDns,
-  readCloudflareStore, readFirewallEdgeDefaults, recordCloudflareReports, removeCloudflareConnection,
+  readCloudflareStore, readFirewallEdgeNeeds, recordCloudflareReports, removeCloudflareConnection,
   saveCloudflareConnection, type CloudflareStorePaths,
 } from "../lib/cloudflare/store";
 import { DEFAULT_EDGE_DEFAULTS, EMPTY_EDGE_DEFAULTS } from "../lib/cloudflare/edge";
-import { tokenTemplate, tokenTemplates } from "../lib/cloudflare/tokens";
+import { listedPermissions, tokenTemplate, tokenTemplates } from "../lib/cloudflare/tokens";
 import { FakeCloudflare, policy } from "./fixtures/dns-api";
 
 const dirs: string[] = [];
@@ -409,10 +409,10 @@ test("removing the last shared Cloudflare connection keeps shared store authorit
   expect(JSON.parse(readFileSync(join(dnsDir, "status.json"), "utf8")).connections).toEqual([]);
 });
 
-test("readFirewallEdgeDefaults includes default edge permissions when cloudflare-edge.json is absent and honors saved defaults", () => {
+test("readFirewallEdgeNeeds includes default edge permissions when cloudflare-edge.json is absent and honors saved defaults", () => {
   const dir = mkdtempSync(join(tmpdir(), "clp-fw-edge-defaults-"));
   dirs.push(dir);
-  const fallbackTemplates = tokenTemplates(readFirewallEdgeDefaults({ firewallDir: dir, rootUid: uid }));
+  const fallbackTemplates = tokenTemplates(readFirewallEdgeNeeds({ firewallDir: dir, rootUid: uid }));
   expect(fallbackTemplates["dns+edge+panelGate"].permissions).toContain("Zone Settings: Edit");
   expect(fallbackTemplates["dns+edge+panelGate"].permissions).toContain("Config Rules: Edit");
   expect(fallbackTemplates["dns+edge+panelGate"].permissions).not.toContain("Zone Settings: Read");
@@ -428,9 +428,29 @@ test("readFirewallEdgeDefaults includes default edge permissions when cloudflare
     zoneChoices: {},
     migrationNote: null,
   }), { mode: 0o600 });
-  const savedTemplates = tokenTemplates(readFirewallEdgeDefaults({ firewallDir: dir, rootUid: uid }));
+  const savedTemplates = tokenTemplates(readFirewallEdgeNeeds({ firewallDir: dir, rootUid: uid }));
   expect(savedTemplates.edge.permissions).toContain("Zone WAF: Edit");
   expect(savedTemplates["dns+edge+panelGate"].permissions).toContain("Zone WAF: Edit");
   expect(savedTemplates.panelGate.permissions).not.toContain("Zone WAF: Edit");
   expect(savedTemplates.dns.permissions).not.toContain("Zone WAF: Edit");
+});
+
+test("readFirewallEdgeNeeds keeps Zone WAF: Edit while a zone still holds the managed skip rule an emptied list removes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-fw-edge-cleanup-"));
+  dirs.push(dir);
+  writeFileSync(join(dir, "cloudflare-edge.json"), JSON.stringify({
+    version: 1,
+    defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] },
+    approved: true, approvedAt: new Date().toISOString(), approvedDigest: "abc", knownZones: [], zoneChoices: {}, migrationNote: null,
+  }), { mode: 0o600 });
+  expect(tokenTemplates(readFirewallEdgeNeeds({ firewallDir: dir, rootUid: uid })).edge.permissions).not.toContain("Zone WAF: Edit");
+
+  writeFileSync(join(dir, "cloudflare-edge-status.json"), JSON.stringify({
+    version: 1, checkedAt: null, zones: [], log: [], trackedManagedRules: { "0123456789abcdef0123456789abcdef": ["acme", "skip"] },
+  }), { mode: 0o600 });
+  const needs = readFirewallEdgeNeeds({ firewallDir: dir, rootUid: uid });
+  expect(needs.cleanup).toEqual(["skip"]);
+  const listed = listedPermissions(needs, { includeDns: false, includeEdge: true });
+  expect(listed.find((row) => row.name === "waf")).toMatchObject({ optional: false, usedFor: "Cloudflare edge: removing the WAF skip rule" });
+  expect(tokenTemplates(needs).edge.permissions).toContain("Zone WAF: Edit");
 });

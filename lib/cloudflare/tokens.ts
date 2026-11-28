@@ -7,10 +7,14 @@
  * https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
  * https://developers.cloudflare.com/fundamentals/api/reference/permissions/
  */
-import { DEFAULT_EDGE_DEFAULTS, type EdgeDefaults } from "./edge";
+import { DEFAULT_EDGE_DEFAULTS, type EdgeDefaults, type EdgeRuleKey } from "./edge";
 
-/** Structural subset of Firewall's Cloudflare edge defaults needed for permission checks. */
-export type EdgePermissionNeeds = Pick<EdgeDefaults, "ssl" | "alwaysHttps" | "acmeFullSsl" | "webmailFullSsl" | "skipFirewallIps">;
+/**
+ * Structural subset of Firewall's Cloudflare edge defaults needed for permission checks, plus the managed
+ * rules still to be removed from some zone (`pendingRuleCleanup`).
+ */
+export type EdgePermissionNeeds = Pick<EdgeDefaults, "ssl" | "alwaysHttps" | "acmeFullSsl" | "webmailFullSsl" | "skipFirewallIps">
+  & { cleanup?: readonly EdgeRuleKey[] };
 
 export type PermissionConsumer = "dns" | "redirects" | "edge" | "panelGate" | "shared";
 
@@ -88,14 +92,16 @@ export const PERMISSIONS = {
     grantedBy: ["Config Settings Write"], scope: "zone",
     usedFor: (edge) => {
       const items = [edge.acmeFullSsl && "Let's Encrypt", edge.webmailFullSsl && "webmail"].filter(Boolean);
-      return items.length ? `Cloudflare edge: Full SSL for ${items.join(" and ")}` : null;
+      if (items.length) return `Cloudflare edge: Full SSL for ${items.join(" and ")}`;
+      return edge.cleanup?.some((key) => key !== "skip") ? "Cloudflare edge: removing Full SSL rules" : null;
     },
     enables: always("Firewall's Cloudflare edge Full SSL rules"),
   },
   waf: {
     key: "zone_waf", type: "edit", label: "Zone WAF: Edit", consumer: "edge",
     grantedBy: ["Zone WAF Write"], scope: "zone",
-    usedFor: (edge) => edge.skipFirewallIps.length > 0 ? "Cloudflare edge: WAF skip list" : null,
+    usedFor: (edge) => edge.skipFirewallIps.length > 0 ? "Cloudflare edge: WAF skip list"
+      : edge.cleanup?.includes("skip") ? "Cloudflare edge: removing the WAF skip rule" : null,
     enables: always("Firewall's Cloudflare edge WAF skip list"),
   },
   // Required by Firewall's Panel gate; optional for DNS, Redirects and edge defaults.

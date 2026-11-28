@@ -1,7 +1,7 @@
 /**
- * Moves redirect domains, stand-in records, redirect review holds, tracked
- * Cloudflare rules, and matching Cloudflare zone choices out of `addons/dns`
- * into the standalone `redirects` addon on upgrade.
+ * Moves redirect domains, stand-in records, redirect review holds, and
+ * matching Cloudflare zone choices out of `addons/dns` into the standalone
+ * `redirects` addon on upgrade.
  *
  * Returns an in-memory rollback closure that restores every touched file
  * verbatim and removes newly created Redirects state/config if the update
@@ -14,7 +14,6 @@ import { errorMessage } from "../../lib/errors";
 import { addonConfigFile, addonStateDir, ROOT_UID } from "../../lib/paths";
 import { readState, writeState } from "../../lib/root-state";
 import { isTrustedFile } from "../../lib/trusted-file";
-import type { TrackedRedirectRule } from "./engine";
 import {
   cloudflareId, connectionId, emptyPolicy, hostname, parsePolicy, parseRedirect, parseRedirects,
   type Policy, type Redirect, type ZoneChoice,
@@ -64,13 +63,6 @@ export function redirectsMigrationPending(dnsDir = addonStateDir("dns")): boolea
       if (Array.isArray(parsed?.redirects) && parsed.redirects.length > 0) return true;
     }
   } catch { /* ignore unreadable */ }
-  try {
-    const statusPath = join(dnsDir, "status.json");
-    if (existsSync(statusPath)) {
-      const parsed = JSON.parse(readFileSync(statusPath, "utf8")) as { redirectRules?: unknown };
-      if (parsed?.redirectRules && typeof parsed.redirectRules === "object" && Object.keys(parsed.redirectRules).length > 0) return true;
-    }
-  } catch { /* ignore unreadable */ }
   return false;
 }
 
@@ -78,26 +70,9 @@ function sameHosts(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((host, index) => host === right[index]);
 }
 
-function parseTrackedRules(raw: unknown): Record<string, TrackedRedirectRule> {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Record<string, TrackedRedirectRule> = {};
-  for (const [domain, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const entry = value as Record<string, unknown>;
-    try {
-      const source = hostname(domain, "a tracked redirect");
-      const conn = connectionId(entry.connectionId);
-      const zoneId = cloudflareId(entry.zoneId, "a tracked zone");
-      const zoneName = hostname(entry.zoneName, "a tracked zone");
-      out[source] = { connectionId: conn, zoneId, zoneName };
-    } catch { /* skip malformed entry */ }
-  }
-  return out;
-}
-
 /**
- * Migrates redirect domains, stand-ins, holds, and tracked Cloudflare rules out
- * of DNS into the standalone Redirects addon. Enables Redirects when DNS was
+ * Migrates redirect domains, stand-ins, and holds out of DNS into the
+ * standalone Redirects addon. Enables Redirects when DNS was
  * enabled so live redirects keep reconciling after upgrade.
  */
 export function migrateRedirectsFromDns(
@@ -136,9 +111,7 @@ export function migrateRedirectsFromDns(
   try { if (dnsStandInsSnap) dnsStandInsJson = JSON.parse(dnsStandInsSnap.text) as Record<string, StandInRecord>; } catch { dnsStandInsJson = null; }
 
   const rawLegacyRedirects = Array.isArray(dnsPolicyJson?.redirects) ? dnsPolicyJson!.redirects : [];
-  const legacyTracked = parseTrackedRules(dnsStatusJson?.redirectRules);
-  const hasStandInsFile = dnsStandInsSnap !== null;
-  if (!rawLegacyRedirects.length && !Object.keys(legacyTracked).length && !hasStandInsFile) return null;
+  if (!rawLegacyRedirects.length && !dnsStandInsSnap) return null;
 
   const targetDirExisted = existsSync(redirectsDir);
   const configExisted = existsSync(redirectsConfigFile);
@@ -243,31 +216,6 @@ export function migrateRedirectsFromDns(
       writeState(redirStandInsPath, { ...dnsStandInsJson, ...existingStandIns }, uid);
     }
 
-    // Migrate tracked Cloudflare redirect rules and Cloudflare connectionIds into redirects/status.json.
-    const legacyConnectionIds = Array.isArray(dnsStatusJson?.connectionIds)
-      ? dnsStatusJson!.connectionIds.filter((id): id is string => typeof id === "string" && !id.startsWith("pdns-"))
-      : undefined;
-    if (Object.keys(legacyTracked).length > 0 || legacyConnectionIds !== undefined) {
-      const existingStatus = readState<{
-        checkedAt?: string | null;
-        plans?: Record<string, unknown>;
-        connectionIds?: string[];
-        redirectRules?: Record<string, TrackedRedirectRule | TrackedRedirectRule[]>;
-      }>(redirStatusPath, uid, () => ({ checkedAt: null, plans: {} }));
-      const nextStatus = {
-        checkedAt: existingStatus.checkedAt ?? null,
-        plans: existingStatus.plans ?? {},
-        ...(existingStatus.connectionIds !== undefined
-          ? { connectionIds: existingStatus.connectionIds }
-          : legacyConnectionIds !== undefined
-            ? { connectionIds: legacyConnectionIds }
-            : {}),
-        redirectRules: { ...legacyTracked, ...(existingStatus.redirectRules ?? {}) },
-      };
-      keep(redirStatusPath);
-      writeState(redirStatusPath, nextStatus, uid);
-    }
-
     // Enable Redirects when DNS was enabled and had redirect state.
     if (dnsEnabled && !configExisted && (migratedRedirects.length > 0 || (dnsStandInsJson && Object.keys(dnsStandInsJson).length > 0))) {
       enableRedirects();
@@ -286,8 +234,6 @@ export function migrateRedirectsFromDns(
       restoreFile({ ...dnsPolicySnap, text: `${JSON.stringify(cleanedDnsPolicy, null, 2)}\n` });
     }
     if (dnsStatusSnap && dnsStatusJson) {
-      const hasLegacyRules = Boolean(dnsStatusJson.redirectRules && typeof dnsStatusJson.redirectRules === "object"
-        && Object.keys(dnsStatusJson.redirectRules as Record<string, unknown>).length > 0);
       const nextDnsPlans: Record<string, unknown> = {};
       let droppedPlans = false;
       for (const [domain, plan] of Object.entries(dnsPlans)) {
@@ -297,11 +243,9 @@ export function migrateRedirectsFromDns(
         }
         nextDnsPlans[domain] = plan;
       }
-      if (hasLegacyRules || droppedPlans) {
+      if (droppedPlans) {
         keep(dnsStatusPath);
-        const cleanedDnsStatus: Record<string, unknown> = { ...dnsStatusJson, plans: nextDnsPlans };
-        delete cleanedDnsStatus.redirectRules;
-        restoreFile({ ...dnsStatusSnap, text: `${JSON.stringify(cleanedDnsStatus, null, 2)}\n` });
+        restoreFile({ ...dnsStatusSnap, text: `${JSON.stringify({ ...dnsStatusJson, plans: nextDnsPlans }, null, 2)}\n` });
       }
     }
     if (dnsStandInsSnap) {

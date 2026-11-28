@@ -29,14 +29,14 @@ import {
 import { type ApiFetch, redact } from "../../lib/provider-http";
 import { MailcowApi } from "./mailcow";
 import {
-  connectionId, hostname, isMailcowLinked, legacyProfileZones, parseAccountRef, parseMailcow, parsePolicy, parsePowerDnsConnection, parseProfile,
+  composeProfiles, connectionId, hostname, isMailcowLinked, legacyProfileZones, parseAccountRef, parseMailcow, parsePolicy, parsePowerDnsConnection, parseProfile,
   parseSecrets, profileEffect, profileId, providerId, secretText, ipAddress, EMPTY_MAILCOW, MAX_CONNECTIONS,
   MAX_DOMAINS, MAX_PROFILES, type HttpRole, type MailcowSettings, type Policy, type PowerDnsConnection, type Profile, type ProfileRole, type Secrets,
 } from "./model";
 import { parsePowerDnsApiKey, PowerDnsProvider } from "./powerdns";
 import { PROVIDER_LABELS, type DnsRecord, type ProviderKind } from "./provider";
 import { mailcowSeededProfile, presetsFor, seededPolicy, type Preset } from "./presets";
-import { describeRecord, renderProfile, sameRecord } from "./records";
+import { describeRecord, recordsOwnedBy, renderProfile, sameRecord } from "./records";
 import { coveredHosts, readEdgeSources, readRedirectDomains, type RedirectDomain } from "../../lib/redirect-domains";
 import { isStandInSite, readStandInMarks } from "../../lib/stand-ins";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
@@ -44,7 +44,7 @@ import { readState, writeState } from "../../lib/root-state";
 import { accessView, type AccessView } from "../../lib/cloudflare/access";
 import {
   cloudflareTokenHolds, hasSharedCloudflareStore, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
-  readFirewallEdgeDefaults, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
+  readFirewallEdgeNeeds, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
   type CloudflareStorePaths,
 } from "../../lib/cloudflare/store";
 import { tokenTemplate, tokenTemplates, type PermissionName, type TokenTemplate, type TokenTemplates } from "../../lib/cloudflare/tokens";
@@ -340,14 +340,8 @@ class Files {
       ? clean.profiles.map((profile) => legacyZones.has(profile.id) ? { ...profile, zone: legacyZones.get(profile.id) } : profile)
       : clean.profiles;
     // Redirects not yet moved to the Redirects addon stay for its migration, which reads them from here.
-    // Their Mail roles are in `clean` now, so a later read never restores one an administrator removed.
     const raw = onDisk && typeof onDisk === "object" ? (onDisk as { redirects?: unknown }).redirects : undefined;
-    const withoutMail = (entry: unknown) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
-      const { mailProfileId: _imported, ...rest } = entry as Record<string, unknown>;
-      return rest;
-    };
-    const redirects = Array.isArray(raw) && raw.length ? { redirects: raw.map(withoutMail) } : {};
+    const redirects = Array.isArray(raw) && raw.length ? { redirects: raw } : {};
     writeState(this.path("policy"), { ...clean, profiles, connections: legacy, ...redirects }, this.paths.rootUid);
   }
 
@@ -629,22 +623,44 @@ class Action {
    * Saves `next`, and forgets what was written for a current site it no longer
    * enforces: those records are the site's own again, as taking it out of a
    * profile promises, so they are never offered for removal once it is deleted.
+   * A site taken out of one role, or moved to another profile in it, keeps only
+   * the records its profiles now write at.
    */
   private savePolicy(next: Policy): void {
+    let before: Policy | undefined;
+    try { before = this.files.policy(); } catch { /* nothing to compare with */ }
     this.files.savePolicy(next);
-    this.cleanupManagedForPolicy(next);
+    this.cleanupManagedForPolicy(next, before);
   }
 
-  private cleanupManagedForPolicy(next: Policy): void {
+  private cleanupManagedForPolicy(next: Policy, before?: Policy): void {
     const managed = this.files.managed();
-    let forgot = false;
+    const composed = (policy: Policy, domain: string) => {
+      const assigned = policy.assignments[domain];
+      const find = (id: string | null | undefined) => policy.profiles.find((profile) => profile.id === id) ?? null;
+      return composeProfiles(find(assigned?.http), find(assigned?.mail));
+    };
+    let changed = false;
     for (const domain of this.domainsOf(next)) {
+      const entry = managed[domain];
+      if (!entry) continue;
       const assigned = next.assignments[domain];
-      if (!managed[domain] || (next.automatic && (assigned?.http || assigned?.mail))) continue;
-      delete managed[domain];
-      forgot = true;
+      if (!next.automatic || !(assigned?.http || assigned?.mail)) {
+        delete managed[domain];
+        changed = true;
+        continue;
+      }
+      const was = before?.assignments[domain];
+      if (!was || (was.http === assigned.http && was.mail === assigned.mail)) continue;
+      const profile = composed(next, domain);
+      if (!profile) continue;
+      const records = recordsOwnedBy(profile, domain, entry.zoneName, entry.records);
+      if (records.length === entry.records.length) continue;
+      if (records.length) managed[domain] = { ...entry, records };
+      else delete managed[domain];
+      changed = true;
     }
-    if (forgot) this.files.saveManaged(managed);
+    if (changed) this.files.saveManaged(managed);
   }
 
   /**
@@ -701,7 +717,7 @@ class Action {
     for (const [key, nameServers] of freshCreated) {
       createdZones[key] = { at: this.now, nameServers };
     }
-    const { createdZones: _previousCreated, redirectRules: _legacyRules, ...restStatus } = status as Status & { redirectRules?: unknown };
+    const { createdZones: _previousCreated, ...restStatus } = status;
     this.files.saveStatus({
       ...restStatus,
       ...panelSettled && { panelProxied: run.panelProxied },
@@ -800,7 +816,7 @@ class Action {
             provider: "cloudflare",
             label: connection.label,
             hasToken: Boolean(secrets.cloudflare[connection.id]),
-            access: stored?.active ? accessView(stored, readFirewallEdgeDefaults({ rootUid: this.paths.rootUid }), { includeDns: true, includeEdge: false, requirePanelGate: false }) : null,
+            access: stored?.active ? accessView(stored, readFirewallEdgeNeeds({ rootUid: this.paths.rootUid }), { includeDns: true, includeEdge: false, requirePanelGate: false }) : null,
           };
         }),
         ...(policy.powerdns ?? []).map((connection): DnsConnectionView => {
@@ -832,8 +848,8 @@ class Action {
         .map(([domain, entry]) => ({ domain, zone: entry.zoneName, records: entry.records.length })),
       checkedAt: status.checkedAt,
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow, status.backoff.powerdns ?? 0),
-      token: tokenTemplate(readFirewallEdgeDefaults({ rootUid: this.paths.rootUid }), { dns: true }),
-      tokens: tokenTemplates(readFirewallEdgeDefaults({ rootUid: this.paths.rootUid })),
+      token: tokenTemplate(readFirewallEdgeNeeds({ rootUid: this.paths.rootUid }), { dns: true }),
+      tokens: tokenTemplates(readFirewallEdgeNeeds({ rootUid: this.paths.rootUid })),
       firewallEnabled: existsSync(addonConfigFile("firewall")),
       redirectsEnabled: existsSync(addonConfigFile("redirects")),
       presets: presetsFor(mailcowLinked),
@@ -1838,6 +1854,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     const taken = new Set(policy.profiles.map((profile) => profile.id));
     let id = existing?.id ?? nameSlug(String(body.name ?? ""), "the profile name");
     for (let n = 2; !existing && taken.has(id); n++) id = `${nameSlug(String(body.name), "the profile name", 36)}-${n}`;
+    if (!existing && policy.profiles.length >= MAX_PROFILES) failAction(`At most ${MAX_PROFILES} profiles can be created; delete an unused profile first`);
     const role = existing?.role ?? body.role;
     const profile = parseProfile({ ...body, id, ...(role !== undefined ? { role } : {}) });
     action.checkProfile(profile);

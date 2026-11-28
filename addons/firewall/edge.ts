@@ -18,7 +18,7 @@ import { connectionPermissions } from "../../lib/cloudflare/access";
 import { CloudflareApi, type CfRuleset, type CfZone } from "../../lib/cloudflare/api";
 import {
   CONFIG_PHASE, DEFAULT_EDGE_DEFAULTS, FIREWALL_PHASE, RULE_PHASES, describeEdgeDefaults, edgeDefaultsDigest, hasActiveEdgeDefaults,
-  parseEdgeDefaults, planZoneEdge, type EdgeDefaults, type EdgeRuleKey, type LiveZoneEdgeState, type PlannedEdgeChange,
+  parseEdgeDefaults, pendingRuleCleanup, planZoneEdge, type EdgeDefaults, type EdgeRuleKey, type LiveZoneEdgeState, type PlannedEdgeChange,
   type ZoneCurrentSummary,
 } from "../../lib/cloudflare/edge";
 import {
@@ -473,10 +473,11 @@ async function discoverZones(
   }
 
   // Prefer a connection whose stored token report holds the required edge permissions.
+  const needs = { ...defaults, cleanup: pendingRuleCleanup(defaults, readEdgeStatus(paths).trackedManagedRules ?? {}) };
   const connScore = (connId: string): number => {
     const stored = store.reports.find((entry) => entry.id === connId);
     if (!stored?.active || !stored.token?.readable) return 0;
-    const { missing } = connectionPermissions(stored, defaults, { includeDns: false, includeEdge: true, requirePanelGate: false });
+    const { missing } = connectionPermissions(stored, needs, { includeDns: false, includeEdge: true, requirePanelGate: false });
     return missing.length === 0 ? 1 : -missing.length;
   };
 
@@ -644,9 +645,17 @@ function ambiguousStatusOf(ambiguous: AmbiguousZone): EdgeZoneStatus {
   };
 }
 
+function ruleState(rule: CfRuleset["rules"][number] | undefined): string {
+  if (!rule) return "";
+  const { ref, action, expression, enabled, action_parameters: params } = rule;
+  return JSON.stringify([ref, action, expression, enabled, params ?? null]);
+}
+
 /**
  * Applies planned changes to one zone: rules first (so ACME Full SSL is in
- * place before SSL switches to Full (strict)), then zone settings.
+ * place before SSL switches to Full (strict)), then zone settings. A rule is
+ * read again before it is updated or deleted, and the zone stops when it
+ * changed since it was planned.
  */
 async function applyZoneChanges(
   evaluated: EvaluatedZone,
@@ -661,11 +670,21 @@ async function applyZoneChanges(
     ...changes.filter((change) => change.kind === "rule"),
     ...changes.filter((change) => change.kind === "setting"),
   ];
+  const plannedRules = new Map(Object.entries(live.rulesets)
+    .flatMap(([phase, ruleset]) => (ruleset?.rules ?? []).map((rule) => [`${phase} ${rule.id}`, ruleState(rule)] as const)));
   try {
     for (const change of ordered) {
       if (change.kind === "rule") {
         const phase = change.phase!;
         const currentRuleset = live.rulesets[phase] ?? null;
+        if (change.action !== "create" && currentRuleset && change.ruleId) {
+          const reread = await api.entrypoint(zone.id, phase);
+          const planned = plannedRules.get(`${phase} ${change.ruleId}`) ?? "";
+          if (planned !== ruleState(reread?.rules.find((rule) => rule.id === change.ruleId))) {
+            live.rulesets[phase] = reread;
+            throw new Error(`${change.subject} changed in Cloudflare while Firewall was applying; check again to plan from the current rule.`);
+          }
+        }
         if (change.action === "delete") {
           if (!currentRuleset || !change.ruleId) continue;
           await api.deleteRule(zone.id, phase, currentRuleset.id, change.ruleId);
@@ -770,11 +789,30 @@ async function mergeRefusedPermissions(
 // Review construction
 // ---------------------------------------------------------------------------
 
+/** What each change will write to, so a review never confirms against a rule replaced or edited since. */
+function changeTargets(evaluated: EvaluatedZone[]): unknown[] {
+  return evaluated.filter((entry) => entry.changes.length > 0).map((entry) => ({
+    zoneId: entry.discovered.zone.id,
+    changes: entry.changes.map((change) => ({
+      setting: change.setting ?? null,
+      value: change.value ?? null,
+      phase: change.phase ?? null,
+      rulesetId: change.rulesetId ?? null,
+      ruleId: change.ruleId ?? null,
+      rule: change.rule ?? null,
+      live: change.phase && change.ruleId
+        ? entry.live.rulesets[change.phase]?.rules.find((rule) => rule.id === change.ruleId) ?? null
+        : null,
+    })),
+  }));
+}
+
 function reviewDigest(
   kind: EdgePendingReview["kind"],
   approve: boolean,
   nextDefaults: EdgeDefaults,
   zones: EdgeReviewZone[],
+  targets: unknown[],
   zoneKey?: string,
 ): string {
   return createHash("sha256").update(JSON.stringify({
@@ -788,6 +826,7 @@ function reviewDigest(
       conflicts: zone.conflicts,
       error: zone.error,
     })),
+    targets,
   })).digest("hex").slice(0, 32);
 }
 
@@ -869,7 +908,7 @@ function buildReview(
     confirmLabel = danger ? "Confirm and apply" : "Apply changes";
   }
 
-  const digest = reviewDigest(kind, kind !== "zone", nextDefaults, zones, zoneKey);
+  const digest = reviewDigest(kind, kind !== "zone", nextDefaults, zones, changeTargets(evaluated), zoneKey);
   const token = randomBytes(16).toString("hex");
   return {
     digest,
@@ -1191,9 +1230,15 @@ export async function confirmCloudflareEdge(token: string, options: EdgeOptions 
       clearPending(paths);
       failAction("Approve Cloudflare edge defaults first before applying changes to a single zone");
     }
+    if (listCloudflareSecrets(cfPathsOf(paths)).length === 0) {
+      failAction("Connect Cloudflare first before applying edge changes");
+    }
 
     const status = readEdgeStatus(paths);
     const discovery = await discoverZones(paths, config, options, pending.nextDefaults);
+    if (pending.kind !== "zone" && discovery.connectionErrors.length > 0 && discovery.zones.length === 0) {
+      failAction(`Cloudflare could not be read: ${discovery.connectionErrors.join("; ")}`);
+    }
     const scopedZones = pending.kind === "zone"
       ? discovery.zones.filter((entry) => entry.zoneKey === pending.zoneKey)
       : discovery.zones;
@@ -1357,7 +1402,8 @@ export function edgeActionNeeded(options?: EdgeOptions): ActionNeeded[] {
       if (!store.tokens[connection.id]) continue;
       const report = store.reports.find((entry) => entry.id === connection.id);
       if (!report?.active) continue;
-      const { missing } = connectionPermissions(report, config.defaults, {
+      const needs = { ...config.defaults, cleanup: pendingRuleCleanup(config.defaults, status.trackedManagedRules ?? {}) };
+      const { missing } = connectionPermissions(report, needs, {
         includeDns: false,
         includeEdge: true,
         requirePanelGate: false,

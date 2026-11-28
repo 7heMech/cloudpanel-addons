@@ -1,7 +1,7 @@
 import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { detectAddresses } from "../../lib/addresses";
-import { cloudflareConnectionViews, readFirewallEdgeDefaults, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
+import { cloudflareConnectionViews, readFirewallEdgeNeeds, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
 import { tokenTemplates, type TokenTemplates } from "../../lib/cloudflare/tokens";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
@@ -315,13 +315,13 @@ function edgeOrError(options?: EdgeOptions): EdgePageView | { error: string } {
 }
 
 function cloudflareForFirewall(options?: CloudflareStoreOptions, edgeOptions?: EdgeOptions): FirewallCloudflareView {
-  const edgeDefaults = readFirewallEdgeDefaults({
+  const edgeNeeds = readFirewallEdgeNeeds({
     firewallDir: edgeOptions?.paths?.stateDir,
     rootUid: edgeOptions?.paths?.rootUid ?? options?.paths?.rootUid,
   });
   let connections: CloudflareConnectionView[] = [];
   try {
-    connections = cloudflareConnectionViews(edgeDefaults, { includeDns: false, includeEdge: true, requirePanelGate: true }, options?.paths).connections;
+    connections = cloudflareConnectionViews(edgeNeeds, { includeDns: false, includeEdge: true, requirePanelGate: true }, options?.paths).connections;
   } catch { /* unreadable store renders empty */ }
   let serverIps: string[] = [];
   try {
@@ -330,7 +330,7 @@ function cloudflareForFirewall(options?: CloudflareStoreOptions, edgeOptions?: E
   } catch { /* best effort */ }
   return {
     connections,
-    templates: tokenTemplates(edgeDefaults),
+    templates: tokenTemplates(edgeNeeds),
     serverIps,
     dnsEnabled: existsSync(addonConfigFile("dns")),
   };
