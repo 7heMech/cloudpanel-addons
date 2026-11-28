@@ -41,6 +41,9 @@ export function redirectStatus(redirect: RedirectView, automatic: boolean, singl
   const plan = redirect.plan;
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
   if (plan.problems.length) return { label: "Needs attention", tone: "bad", hint: plan.problems[0]! };
+  if (plan.replacedBy) {
+    return { label: "Replaced by a site", tone: "warn", hint: automatic ? `${plan.replacedBy}; removed at the next check` : `${plan.replacedBy}; removed once you review it` };
+  }
   const waiting = plan.changes.filter((change) => change.waits).length;
   if (waiting) return { label: "Waits for review", tone: "warn", hint: "Provider changed; review before applying" };
   if (!plan.zone) {
@@ -130,7 +133,7 @@ function redirectsCard(state: RedirectsState, now: number): string {
     <button class="btn btn-primary" type="button" onclick="redirEdit('')">Add redirect</button></div>`;
   const footer = `<div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span></div>`;
   return `<div class="card card-table"><div class="card-header"><div><h2>Redirects</h2>
-      <p class="hint">Domains forwarded to another address. Their mail records are set in DNS, as each domain's Mail role.</p></div>${tools}</div>
+      <p class="hint">Domains forwarded to another address. Mail for these domains is set in DNS.</p></div>${tools}</div>
     ${state.redirects.length
       ? `<div class="table-scroll"><table class="fleet-table redir-table"><thead><tr>
           <th>Domain</th><th>Redirects to</th><th>Served by</th><th>Status</th><th class="action-cell"></th>

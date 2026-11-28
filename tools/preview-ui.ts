@@ -452,6 +452,17 @@ function redirectsPreviewState(url: URL): RedirectsState {
       plan: plan("promo.example.co.uk", { zone: cfZone("example.co.uk", "pending") }),
     },
     {
+      source: "newsite.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: false,
+      plan: plan("newsite.example.org", {
+        zone: cfZone("example.org"),
+        replacedBy: "newsite.example.org",
+        changes: [
+          { action: "delete", subject: "Cloudflare redirect rule", detail: "301 to concat(\"https://example.com\", http.request.uri.path)" },
+          { action: "delete", subject: "AAAA newsite.example.org", detail: "100:: · proxied" },
+        ],
+      }),
+    },
+    {
       source: "conflict.example.net", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mode: "auto", standIn: false,
       plan: plan("conflict.example.net", {
         zone: null,
@@ -538,36 +549,6 @@ async function redirectsPreviewApi(req: Request, path: string): Promise<Response
   }
   if (path === "/addons/redirects/api/create-site-helper" && req.method === "GET") {
     return Response.json({ ok: true, data: { redirects: PREVIEW_CREATE_SITE_REDIRECTS } });
-  }
-  if (path === "/addons/redirects/api/redirects/prepare-replace" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { source?: string };
-    const entry = PREVIEW_CREATE_SITE_REDIRECTS.find((item) => item.source === body.source) ?? PREVIEW_CREATE_SITE_REDIRECTS[0]!;
-    const changes = entry.standIn
-      ? [{ action: "delete", subject: "Stand-in site", detail: "Removed so a CloudPanel site can take this domain" }]
-      : [{ action: "delete", subject: "Cloudflare redirect rule", detail: `${entry.source} and www.${entry.source}: 301 to ${entry.target}` }];
-    return Response.json({
-      ok: true,
-      data: {
-        review: {
-          token: `preview-replace-${entry.source}`,
-          title: `Replace redirect for ${entry.source}`,
-          text: entry.standIn
-            ? `This deletes the stand-in site on this server and removes ${entry.source} from Redirects so you can create the new CloudPanel site. Non-web DNS records such as mail and verification stay untouched.`
-            : `This deletes the Cloudflare Single Redirect rule in ${entry.zone} and removes ${entry.source} from Redirects so you can create the new CloudPanel site. Non-web DNS records such as mail and verification stay untouched.`,
-          sites: [{ domain: entry.source, mode: "enforce", zone: null, changes, problems: [], zoneChoices: [] }],
-          blocked: false,
-          confirmLabel: "Replace redirect",
-          danger: true,
-        },
-      },
-    });
-  }
-  if (path === "/addons/redirects/api/confirm" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { token?: string };
-    if (body.token && body.token.startsWith("preview-replace-")) {
-      const source = body.token.slice("preview-replace-".length);
-      return Response.json({ ok: true, data: { notice: `Removed the redirect for ${source}.` } });
-    }
   }
   return null;
 }
@@ -1580,14 +1561,6 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
   const search = term ? `<script>(function () { var input = document.getElementById("clp-wp-plugin-search"); input.value = ${JSON.stringify(term).replaceAll("<", "\\u003c")};
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); })();</script>` : "";
   const prefillDomain = url.searchParams.get("redirect") ?? "";
-  const openReplace = url.searchParams.has("open-replace") ? `<script>(function () {
-    var timer = setInterval(function () {
-      var btn = document.querySelector(".clp-redir-cs-btn");
-      if (!btn) return;
-      clearInterval(timer);
-      btn.click();
-    }, 50);
-  })();</script>` : "";
   const redirectBlock = manager ? "" : twigForRole(createSiteRedirectSnippet("/addons/redirects"), true);
   const field = (id: string, label: string, value: string, type = "text") => `<label for="site_new_word_press_${id}" class="col-form-label required">${label}</label>
                   <input type="${type}" id="site_new_word_press_${id}" name="site_new_word_press[${id}]" required="required" class="form-control form-control-lg" value="${Bun.escapeHTML(value)}">`;
@@ -1611,7 +1584,7 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
                 <div class="col-6">${field("adminPassword", "Admin Password", "preview-only-password")}</div>
               </div>
             </div>
-${seed}${manager && !wpNewSiteManagers ? "" : twigForRole(wpToolsNewSiteForm("/addons/wp-tools", wpNewSiteManagers), !manager)}${redirectBlock}${search}${openReplace}
+${seed}${manager && !wpNewSiteManagers ? "" : twigForRole(wpToolsNewSiteForm("/addons/wp-tools", wpNewSiteManagers), !manager)}${redirectBlock}${search}
             <div class="row">
               <div class="col-6 text-start">
                 <a href="/sites" class="btn btn-lg btn-gray">Back</a>

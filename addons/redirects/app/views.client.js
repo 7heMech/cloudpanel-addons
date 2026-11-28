@@ -151,16 +151,12 @@ async function redirDelete() {
   const source = CLP_ROOT.getElementById('redir-edit-form').elements.namedItem('source').value;
   const redirect = redirFindEntry(source);
   dialog.close();
-  const hasCf = (redirState.connections || []).length > 0;
-  const cfServed = hasCf && redirect && redirect.mode !== 'local' && !redirect.standIn;
-  if (redirState.automatic && cfServed) return redirPost('/api/redirects/delete', { source: source });
+  if ((redirState.connections || []).length) return redirPost('/api/redirects/delete', { source: source });
   const accepted = await confirmAction({
     title: 'Delete the redirect for ' + source + '?',
     text: redirect && redirect.standIn
       ? 'Its stand-in site is deleted from this server, so ' + source + ' stops redirecting. Non-web DNS records stay untouched.'
-      : hasCf
-        ? 'Redirects stops managing it. Any Cloudflare rule and DNS records stay as they are.'
-        : 'Redirects stops managing it.',
+      : 'Redirects stops managing it.',
     confirmLabel: 'Delete',
     danger: true,
   });
@@ -197,6 +193,10 @@ function redirShowDetail(source) {
         '<select id="redir-zone-choice">' + plan.zoneChoices.map(function (choice) {
           return '<option value="' + redirEsc(choice.connectionId + '/' + choice.zoneId) + '">' + redirEsc(choice.label) + '</option>';
         }).join('') + '</select><button class="btn" type="button" onclick="redirChooseZone()">Use this</button></div></div>';
+    }
+    if (plan.replacedBy && !plan.problems.length) {
+      html += '<div class="notice">CloudPanel has the site ' + redirEsc(plan.replacedBy) + ', which replaces this redirect. ' +
+        (redirState.automatic ? 'The next check removes it.' : 'Delete it, or turn on Automatic, to remove it.') + '</div>';
     }
     if (plan.held && !plan.problems.length) {
       html += '<div class="notice">Cloudflare connections changed, so moving this redirect waits until you review and confirm the changes below.</div>';
