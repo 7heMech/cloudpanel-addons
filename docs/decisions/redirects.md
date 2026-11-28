@@ -190,7 +190,8 @@ When the rule cannot be read (a connection failing discovery, an unreadable or
 unreachable tracked zone, two matching rules, rules in two zones, or another
 enabled rule matching the host by pattern), the plan carries that problem and
 the redirect is kept whole. A failed delete is recorded as a problem and retried
-on the next run.
+on the next run. A confirmed review counts only the redirects whose writes all
+succeeded as applied and names the others apart.
 
 ## Create Site notice
 

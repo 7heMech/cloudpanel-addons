@@ -875,8 +875,13 @@ class Action {
     this.forget([...run.replaced.keys()]);
     const afterPlans = run.planAll(pending.domains);
     await this.record(run, afterPlans, pending.domains);
+    const failed = pending.domains.filter((domain) => run.failed().includes(domain));
+    const applied = pending.domains.length - failed.length;
+    const unfinished = failed.length
+      ? ` Could not finish ${failed.join(", ")}; ${failed.length === 1 ? "its row says" : "their rows say"} why, and the next check tries again.`
+      : "";
     return this.reply({
-      notice: `Applied to ${pending.domains.length} redirect${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " Redirects is Automatic."}`,
+      notice: `Applied to ${applied} redirect${applied === 1 ? "" : "s"}.${unfinished}${current.automatic ? "" : " Redirects is Automatic."}`,
     });
   }
 

@@ -1113,6 +1113,23 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.sites.map((site) => site.domain)).toEqual(["ask.example"]);
   });
 
+  test("a confirmed replacement whose cleanup fails is reported apart from what applied, and kept", async () => {
+    const env = setup();
+    seededZone(env.cf, env.account, "part.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("part.example", "https://example.com")] }));
+    await env.act("set-automatic", { automatic: false });
+    env.sites.push({ id: 47, domain: "part.example", user: "part", selfSigned: false });
+
+    const review = await env.act("set-automatic", { automatic: true });
+    env.cf.failOn = (method, path) => method === "DELETE" && path.includes("/dns_records/");
+    const applied = await env.act("confirm", { token: review.review!.token });
+    expect(applied.notice).toContain("Applied to 0 redirects.");
+    expect(applied.notice).toContain("Could not finish part.example");
+    expect(applied.redirects.map((redirect) => redirect.source)).toEqual(["part.example"]);
+  });
+
   test("a reviewed replacement shows a fresh review when its rule was recreated, rather than deleting the new one", async () => {
     const env = setup();
     seededZone(env.cf, env.account, "swap.example", "https://example.com");
