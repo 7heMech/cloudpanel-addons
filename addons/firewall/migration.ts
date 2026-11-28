@@ -392,10 +392,11 @@ export function migrateCloudflareEdgeFromDns(
   const chosenWithZone = parsed.version === 2 ? chosen.filter((profile) => Object.hasOwn(profile, "zone")) : [];
   const effective = chosenWithZone.length > 0 ? chosenWithZone : chosen;
 
-  const zoneObjects = effective.map((profile) =>
-    profile.zone && typeof profile.zone === "object" && !Array.isArray(profile.zone)
-      ? profile.zone as Record<string, unknown>
-      : {});
+  // DNS's v1-to-v2 save stores a list where legacy profiles with different zone blocks folded into one profile.
+  const asZone = (zone: unknown): Record<string, unknown> =>
+    zone && typeof zone === "object" && !Array.isArray(zone) ? zone as Record<string, unknown> : {};
+  const zoneObjects = effective.flatMap((profile) =>
+    Array.isArray(profile.zone) && profile.zone.length ? profile.zone.map(asZone) : [asZone(profile.zone)]);
 
   const sslValues = [...new Set(zoneObjects.map((zone) => SSL_MODES.find((mode) => mode === zone.ssl) ?? null))];
   const httpsValues = [...new Set(zoneObjects.map((zone) => typeof zone.alwaysHttps === "boolean" ? zone.alwaysHttps : null))];

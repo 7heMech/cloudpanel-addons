@@ -157,10 +157,13 @@ deterministically without altering live DNS records:
   `profileId` maps to the migrated `mailProfileId`, and `defaultProfileId` maps
   to `defaultHttpProfileId` and `defaultMailProfileId`.
 - If DNS saves a v2 `policy.json` before Firewall migrates legacy Cloudflare
-  edge options, `legacyProfileZones` propagates each v1 profile's `zone` block
-  onto its migrated v2 HTTP and Mail profile IDs, and
-  `migrateCloudflareEdgeFromDns` reads both v1 and v2 assignment, redirect, and
-  default profile references.
+  edge options, `legacyProfileZones` gives each migrated v2 HTTP and Mail
+  profile the `zone` blocks of the v1 profiles folded into it, counting only
+  v1 profiles that a site, redirect or the default uses (all of them when none
+  is used). Where folded profiles disagree, the v2 profile keeps the list of
+  their blocks, so Firewall sees the disagreement and leaves that setting for
+  review. `migrateCloudflareEdgeFromDns` reads both v1 and v2 assignment,
+  redirect, and default profile references.
 
 ## What a profile owns
 

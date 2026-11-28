@@ -635,6 +635,53 @@ describe("review regressions", () => {
     });
   });
 
+  test("saving v2 before Firewall edge migration keeps the zone blocks of the legacy profiles folded into one Mail profile", async () => {
+    const mx = { type: "MX", name: "{domain}", content: "mx.example.net", proxied: false, ttl: 1, priority: 10, apexOnly: false };
+    const a = { type: "A", name: "{domain}", content: "{ipv4}", proxied: true, ttl: 1, priority: null, apexOnly: false };
+    const zone = (ssl: string) => ({ ssl, alwaysHttps: true, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] });
+    const migrate = async (profiles: unknown[], assignments: Record<string, string>) => {
+      const env = setup();
+      await env.connect();
+      const policyPath = join(env.dir, "state", "policy.json");
+      writeFileSync(policyPath, `${JSON.stringify({
+        version: 1, automatic: true, createIn: null, defaultProfileId: null, knownSiteIds: [], held: [], connections: [], powerdns: [],
+        zoneChoices: {}, server: { ipv4: "", ipv6: "" },
+        mailcow: { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "" }, panelHost: null,
+        profiles, assignments,
+        redirects: [{ source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, profileId: "redirect-mixed" }],
+      }, null, 2)}\n`, { mode: 0o600 });
+      await env.act("set-automatic", { automatic: false });
+      const onDisk = JSON.parse(readFileSync(policyPath, "utf8"));
+      const fwStateDir = join(env.dir, "firewall-state");
+      const uid = process.getuid!();
+      migrateCloudflareEdgeFromDns(() => {}, {
+        dnsPolicy: policyPath, dnsConfig: env.paths.configFile, cloudflareStateDir: join(env.dir, "state", "cloudflare"),
+        firewallConfig: join(env.dir, "firewall.conf"), firewallPolicy: join(fwStateDir, "policy.json"), firewallStateDir: fwStateDir,
+        edgeConfig: join(fwStateDir, "cloudflare-edge.json"), visitorIpState: join(fwStateDir, "visitor-ip.json"),
+        firewallWasEnabled: true, rootUid: uid,
+      });
+      return { onDisk, edge: readEdgeConfig({ paths: { stateDir: fwStateDir, rootUid: uid } }) };
+    };
+
+    // An unused Mail-only profile does not lend its zone options to the redirect whose Mail half folds into it.
+    const unused = await migrate([
+      { id: "mailonly", name: "Mail only", mailcow: false, zone: zone("strict"), records: [mx] },
+      { id: "redirect-mixed", name: "Redirect Mixed", mailcow: false, zone: zone("full"), records: [a, mx] },
+    ], {});
+    expect(unused.onDisk.redirects[0].mailProfileId).toBe("mailonly");
+    expect(unused.onDisk.profiles.find((p: Record<string, unknown>) => p.id === "mailonly").zone).toEqual(zone("full"));
+    expect(unused.edge.defaults.ssl).toBe("full");
+
+    // Two used profiles with different SSL modes folding into one Mail profile stay a disagreement.
+    const used = await migrate([
+      { id: "mailonly", name: "Mail only", mailcow: false, zone: zone("strict"), records: [mx] },
+      { id: "redirect-mixed", name: "Redirect Mixed", mailcow: false, zone: zone("full"), records: [a, mx] },
+    ], { "mail.example.com": "mailonly" });
+    expect(used.onDisk.profiles.find((p: Record<string, unknown>) => p.id === "mailonly").zone).toEqual([zone("strict"), zone("full")]);
+    expect(used.edge.defaults.ssl).toBeNull();
+    expect(used.edge.migrationNote).toContain("disagreed on SSL/TLS mode");
+  });
+
   test("siteStatus and state stop reporting automatic SSL once a site loses its HTTP role or Automatic turns off", async () => {
     const env = setup();
     env.cf.zones[0]!.status = "pending";

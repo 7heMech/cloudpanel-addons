@@ -700,10 +700,13 @@ function parsePolicyBase(raw: Record<string, unknown>) {
 
 /**
  * Collects unmigrated legacy `zone` blocks from an on-disk `policy.json` keyed
- * by v2 profile id. When the on-disk file is still v1, propagates each legacy
- * profile's `zone` block onto the v2 HTTP and Mail profile ids produced by
- * migration so Firewall's edge migration still sees active site and redirect
- * zone options even if DNS saves v2 first.
+ * by v2 profile id. When the on-disk file is still v1, gives each v2 HTTP and
+ * Mail profile the `zone` blocks of the legacy profiles migration folded into
+ * it, so Firewall's edge migration still sees active site and redirect zone
+ * options even if DNS saves v2 first. Only the legacy profiles in use count, as
+ * in Firewall's own reading of v1. A v2 profile that several of them with
+ * different zone blocks fold into gets the list, so Firewall sees their
+ * disagreement instead of one profile's settings.
  */
 export function legacyProfileZones(onDisk: unknown): Map<string, unknown> {
   const zones = new Map<string, unknown>();
@@ -719,18 +722,38 @@ export function legacyProfileZones(onDisk: unknown): Map<string, unknown> {
   if (!zones.size || raw.version !== 1 || !raw.assignments || typeof raw.assignments !== "object" || Array.isArray(raw.assignments)) {
     return zones;
   }
+  let mapping: Map<string, SiteAssignment>;
   try {
-    const { mapping } = migrateV1PolicyWithMapping(raw, parsePolicyBase(raw));
-    for (const [legacyId, assigned] of mapping) {
-      if (!zones.has(legacyId)) continue;
-      const legacyZone = zones.get(legacyId);
-      if (assigned.http && !zones.has(assigned.http)) zones.set(assigned.http, legacyZone);
-      if (assigned.mail && !zones.has(assigned.mail)) zones.set(assigned.mail, legacyZone);
-    }
+    mapping = migrateV1PolicyWithMapping(raw, parsePolicyBase(raw)).mapping;
   } catch {
     // Fall back to direct id matching if the legacy policy cannot be parsed.
+    return zones;
   }
-  return zones;
+  // Firewall weighs only the profiles sites, redirects and the default use (all of them when none are used); keep v1's set.
+  const used = new Set<string>();
+  for (const value of Object.values(raw.assignments as Record<string, unknown>)) if (typeof value === "string") used.add(value);
+  for (const entry of Array.isArray(raw.redirects) ? raw.redirects : []) {
+    const id = entry && typeof entry === "object" ? (entry as { profileId?: unknown }).profileId : null;
+    if (typeof id === "string") used.add(id);
+  }
+  if (typeof raw.defaultProfileId === "string") used.add(raw.defaultProfileId);
+  const folded = new Map<string, Map<string, unknown>>();
+  for (const [legacyId, assigned] of mapping) {
+    if (!zones.has(legacyId) || (used.size > 0 && !used.has(legacyId))) continue;
+    const legacyZone = zones.get(legacyId);
+    for (const target of [assigned.http, assigned.mail]) {
+      if (!target) continue;
+      const distinct = folded.get(target) ?? new Map<string, unknown>();
+      distinct.set(JSON.stringify(legacyZone), legacyZone);
+      folded.set(target, distinct);
+    }
+  }
+  const migrated = new Map<string, unknown>();
+  for (const [target, distinct] of folded) {
+    const blocks = [...distinct.values()];
+    migrated.set(target, blocks.length === 1 ? blocks[0] : blocks);
+  }
+  return migrated;
 }
 
 function parseAssignment(value: unknown, httpIds: Set<string>, mailIds: Set<string>): SiteAssignment | null {
