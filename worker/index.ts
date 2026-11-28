@@ -92,6 +92,8 @@ const text = (status: number, body: string, headers: Record<string, string> = {}
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 const utcDay = (date: Date) => date.toISOString().slice(0, 10);
+/** Keys come off the wire; a null prototype keeps `__proto__` an ordinary key. */
+const nullObject = <T>() => Object.create(null) as Record<string, T>;
 
 // ---- The contract lib/update-check.ts holds the other side of ----
 
@@ -144,12 +146,12 @@ export function parseUsage(value: unknown, allow: Allowlist): UsageReport | null
   if (!Array.isArray(body.addons) || body.addons.length > 64) return null;
   if (!body.activity || typeof body.activity !== "object" || Array.isArray(body.activity)) return null;
   const addons = [...new Set(body.addons.filter((name): name is string => typeof name === "string" && allow.addons.includes(name)))].sort();
-  const activity: Record<string, Record<string, number>> = {};
+  const activity = nullObject<Record<string, number>>();
   for (const [addon, verbs] of Object.entries(body.activity as Record<string, unknown>)) {
     if (!Object.hasOwn(allow.actions, addon) || !verbs || typeof verbs !== "object" || Array.isArray(verbs)) continue;
     for (const [verb, count] of Object.entries(verbs as Record<string, unknown>)) {
       if (!allow.actions[addon]!.includes(verb) || typeof count !== "number" || !Number.isInteger(count) || count <= 0) continue;
-      (activity[addon] ??= {})[verb] = Math.min(count, MAX_ACTION_COUNT);
+      (activity[addon] ??= nullObject<number>())[verb] = Math.min(count, MAX_ACTION_COUNT);
     }
   }
   return { id: body.id, cloudpanel: body.cloudpanel, addons, activity };
@@ -349,10 +351,13 @@ async function saveUsage(env: Env, usage: UsageReport, check: CheckRequest, hash
   const owner = await env.DB.prepare("SELECT id FROM reporters WHERE day = ? AND hash = ?").bind(day, hash).first<{ id: string }>();
   if (owner?.id !== usage.id) return false;
   const before = await env.DB.prepare("SELECT activity FROM reports WHERE id = ? AND day = ?").bind(usage.id, day).first<{ activity: string }>();
-  const activity: Record<string, Record<string, number>> = before ? JSON.parse(before.activity) : {};
+  const activity = nullObject<Record<string, number>>();
+  for (const [addon, verbs] of Object.entries(before ? JSON.parse(before.activity) as Record<string, Record<string, number>> : {})) {
+    activity[addon] = Object.assign(nullObject<number>(), verbs);
+  }
   for (const [addon, verbs] of Object.entries(usage.activity)) {
     for (const [verb, count] of Object.entries(verbs)) {
-      const sum = (activity[addon] ??= {});
+      const sum = (activity[addon] ??= nullObject<number>());
       sum[verb] = Math.min((sum[verb] ?? 0) + count, MAX_ACTION_COUNT);
     }
   }
