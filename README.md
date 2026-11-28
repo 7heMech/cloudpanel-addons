@@ -39,7 +39,7 @@ below.
 | Addon | Description |
 | --- | --- |
 | [DNS](docs/dns.md) | Each site's Cloudflare or PowerDNS records kept to a profile, with Mailcow set up for its mail. |
-| Redirects | Domain and subdomain redirects through Cloudflare Single Redirects or local stand-in sites, with one-click replacement on Create Site. |
+| Redirects | Domain and subdomain redirects through Cloudflare Single Redirects or local stand-in sites; a site created at a redirect's domain replaces it. |
 | [Firewall](docs/firewall.md) | Cloudflare-only access and visitor IPs for sites, Hetzner Cloud or netcup edge firewalls, a Cloudflare Access gate in front of the panel, and UDP rules on CloudPanel's Firewall page. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |

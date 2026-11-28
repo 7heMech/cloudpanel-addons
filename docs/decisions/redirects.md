@@ -8,16 +8,19 @@ optional path preservation, and optional query string preservation.
 
 A redirect's hosts are the ones it answers for where it resolves: its Cloudflare
 zone's hosts, or its stand-in site's hosts (the registrable domain's `www` is
-included). A plan blocks before any write when one of those hosts is a CloudPanel
-site, or when another redirect answers for one of them. The problem names both
-redirects. Hosts depend on the selected zone, so the check runs at planning, not
-when the policy is parsed.
+included). A plan blocks before any write when another redirect answers for one
+of them, and the problem names both redirects. A real CloudPanel site at one of
+them replaces the redirect (see [Sites replace redirects](#sites-replace-redirects)).
+Hosts depend on the selected zone, so these checks run at planning, not when the
+policy is parsed. Saving or taking over a redirect is refused outright when its
+source, its `www` when the source is a registrable domain, or a custom stand-in
+host is already a site, and a review blocks a new redirect whose planned hosts include one.
 
-Redirects manages HTTP forwarding only. It never manages mail records (`MX`,
-`SPF`, `DKIM`, `DMARC`), verification `TXT` records, `SRV`, or `CAA` records,
-and it does not import from `addons/dns`. DNS reads Redirects' saved state
-through `lib/redirect-domains.ts` and keeps each redirect domain's Mail role, and
-points a stand-in's hosts at this server; see [DNS](dns.md#redirect-domains).
+Redirects manages HTTP forwarding only and never handles mail. It never manages
+mail records (`MX`, `SPF`, `DKIM`, `DMARC`), verification `TXT` records, `SRV`,
+or `CAA` records, and it does not import from `addons/dns`. Mail for a redirect's
+domain is set in DNS. DNS reads Redirects' saved state through
+`lib/redirect-domains.ts`; see [DNS](dns.md).
 
 ## Cloudflare Single Redirects and placeholders
 
@@ -115,11 +118,11 @@ Redirects, Settings, and Activity sections, and cuts tables longer than ten rows
 on phones behind a Show all button (`tbody[data-phone-cut="redir-list"]`).
 
 In Automatic mode, any change that alters what Redirects writes (turning on
-Automatic, saving or taking over redirects, choosing a zone, releasing a held
-transition, deleting a Cloudflare rule, or replacing a redirect from Create
-Site) builds a live plan, stores a root-only pending review with a random token
-and plan digest for 15 minutes, and applies changes only when confirmation
-matches the live re-plan.
+Automatic, saving or taking over redirects, choosing a zone, or releasing a held
+transition) builds a live plan, stores a root-only pending review with a random
+token and plan digest for 15 minutes, and applies changes only when confirmation
+matches the live re-plan. Deleting a redirect is reviewed the same way in both
+modes (see below). In Ask first mode Redirects writes nothing else.
 
 Provider transitions never happen silently. Adding a Cloudflare connection (from
 Redirects or through the shared store in DNS, Firewall, or Manager), removing a
@@ -132,60 +135,80 @@ wait through scheduled checks until an administrator reviews and confirms the
 move through `review-redirect`. Once a Cloudflare rule and placeholder are in
 place on an active zone, Redirects deletes the retired stand-in site.
 
-Deleting a redirect or replacing it checks connected Cloudflare zones for an
-existing rule even when the redirect is currently `mode: "local"` or served by a
-stand-in. It reads the selected zone, the longest matching zones, and the zone
+Deleting a redirect, whether Redirects is Automatic or asks first, always
+removes its Cloudflare rule. With a Cloudflare connection, or a zone where the
+rule was last seen, it shows a review listing the rule and any stand-in site it
+deletes, and applies it only on confirmation of that plan's digest, which covers
+the rule itself. With neither, the page confirms and the stand-in site is
+deleted at once. The check covers connected Cloudflare zones even when the
+redirect is currently `mode: "local"` or served by a stand-in. It reads the selected zone, the longest matching zones, and the zone
 where it last saw the redirect's rule (`status.redirectRules`). A check moves
 that tracked zone only after it finds the rule in the newly selected zone and
 a read of the tracked zone shows no rule left there. If any
 Cloudflare connection fails discovery, no connection lists the tracked zone,
 a zone cannot be read, a zone has conflicting rules, or more than one zone holds
 a rule for the redirect, deletion blocks rather than orphaning a Cloudflare
-rule. On confirmation, Redirects deletes the
-Cloudflare rule and any stand-in site while leaving non-web DNS records
-untouched.
+rule. On confirmation, Redirects deletes the Cloudflare rule first, then any
+stand-in site, while leaving DNS records untouched; deleting a redirect a site
+has replaced also deletes its placeholder records.
 
-## Replacing a redirect on Create Site
+## Sites replace redirects
 
-Creating a CloudPanel site at a domain that already redirects never silently
-deletes the redirect, its Cloudflare rule, or its stand-in site. If an
-administrator creates the site directly, Redirects surfaces a conflict problem
-on that redirect instead of removing anything automatically.
+A real CloudPanel site (not the redirect's own stand-in, judged by
+`ownsStandInSite` and `isStandInSite` in `lib/stand-ins.ts`) at a redirect's
+source or at a host it answers for replaces the redirect. The plan for that
+redirect carries `replacedBy` and lists the removal: the Cloudflare rule (looked
+up as for deletion, in the selected, longest matching and tracked zones), the
+proxied `AAAA 100::` placeholder records at its hosts in those zones, and its
+owned stand-in site. No other record is touched, and the real site never is:
+`StandIns.remove` deletes a site only when `ownsStandInSite` matches.
 
-To make site replacement explicit, Redirects injects a helper block
-(`addons/redirects/inject/create-site.ts`, `required: false`) before
-`ANCHORS.newSiteButtons` across all six native CloudPanel Create Site templates
-(`wordpress`, `php`, `static`, `nodejs`, `python`, `reverse-proxy`), wrapped in
-`{% if is_granted('ROLE_ADMIN') %}`. The markup carries no `name` attributes so
-Symfony never rejects undeclared fields, and its plain ES5 script attaches no
-`submit` listener.
+In Automatic mode the next run applies it without a review: the new-sites hook,
+a scheduled check, or Check now. Redirects declares `newSites`, which runs
+`sync-sites`; Redirects sits before DNS in catalog order so the redirect is gone
+before DNS's hook plans the new site's records. `sync-sites` first checks,
+without the lock or any Cloudflare call, whether a site uses a redirect's source,
+its `www`, or a custom stand-in host, and returns at once when none does. The
+rule is deleted first, then placeholders, then the stand-in. The redirect is then
+dropped from the policy, its plan, tracked rule and hold, and each step is
+logged "Replaced by the site <domain>".
 
-On load, the helper warms the CSRF cookie via `GET /addons/redirects/api/session`
-and fetches `GET /addons/redirects/api/create-site-helper`. That endpoint reads
+In Ask first mode the removal waits as pending changes on the redirect, shown as
+"Replaced by a site". Turning on Automatic reviews and applies it with
+everything else, and deleting the redirect reviews and applies it alone.
+
+When the rule cannot be read (a connection failing discovery, an unreadable or
+unreachable tracked zone, two matching rules, rules in two zones, or another
+enabled rule matching the host by pattern), the plan carries that problem and
+the redirect is kept whole. A failed delete is recorded as a problem and retried
+on the next run.
+
+## Create Site notice
+
+Redirects injects an informational notice (`addons/redirects/inject/create-site.ts`,
+`required: false`) before `ANCHORS.newSiteButtons` across all six native
+CloudPanel Create Site templates (`wordpress`, `php`, `static`, `nodejs`,
+`python`, `reverse-proxy`), wrapped in `{% if is_granted('ROLE_ADMIN') %}`. The
+markup carries no `name` attributes so Symfony never rejects undeclared fields,
+and its plain ES5 script attaches no `submit` listener and posts nothing.
+
+On load it fetches `GET /addons/redirects/api/create-site-helper`, which reads
 local policy and status files only and makes no Cloudflare API calls. When the
-entered domain matches a redirect's source or covered hosts, the helper shows an
-inline notice right below the Domain Name row with a **Replace redirect with
-this site** button.
-
-Clicking the button posts `POST /addons/redirects/api/redirects/prepare-replace`,
-which plans removal against live Cloudflare and stand-in state, then opens a
-`<dialog>` mounted on `document.body` listing the exact Cloudflare rule and
-stand-in site deletions (and noting that non-web DNS records stay untouched).
-Confirming posts `POST /addons/redirects/api/confirm`, verifies the plan digest,
-removes the redirect, and replaces the warning with a green confirmation banner
-so the administrator can click Create. The helper drops a review that arrives
-after the Domain Name field moved to another redirect, and shows the banner
-only for hosts covered by the redirect the server reports as `replaced`. It
+entered domain matches a redirect's source or covered hosts, the notice below the
+Domain Name row says that creating the site replaces the redirect, removing its
+Cloudflare rule and any stand-in site (once reviewed in Redirects, when it asks
+first). A stand-in site already holds its own source domain in CloudPanel, so for
+that domain the notice says to delete the redirect in Redirects first. The script
 builds every URL from the fixed `/addons/redirects` mount and does nothing when
 its `data-url` differs.
 
 ## Permissions and access control
 
-All fourteen web verbs in `addons/redirects/verbs.ts` require `web: "admin"`.
-Non-administrators cannot view or modify redirects, trigger Create Site
-replacement, or reach shared Cloudflare tokens. `reconcile` is root-only and
-runs through `clp-addon-redirects-reconcile` queued by repair with a 30-minute
-runtime bound.
+All thirteen web verbs in `addons/redirects/verbs.ts` require `web: "admin"`.
+Non-administrators cannot view or modify redirects, see the Create Site notice,
+or reach shared Cloudflare tokens. `reconcile` is root-only and runs through
+`clp-addon-redirects-reconcile` queued by repair with a 30-minute runtime bound.
+`sync-sites` is root-only and run by the new-sites watcher.
 
 In `lib/cloudflare/tokens.ts`, `Single Redirect: Edit` (`dynamic_redirect`)
 belongs to `consumer: "redirects"`. Redirects' token template requires `DNS:
