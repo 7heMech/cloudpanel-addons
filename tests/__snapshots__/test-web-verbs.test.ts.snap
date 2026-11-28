@@ -26,6 +26,11 @@ dns:set-panel-host                 admin
 dns:site-status                    panel-user
 dns:take-over                      admin
 dns:zone-account                   admin
+firewall:edge-check                admin
+firewall:edge-confirm              admin
+firewall:edge-review-zone          admin
+firewall:edge-save                 admin
+firewall:edge-zone-choice          admin
 firewall:hetzner-connect           admin
 firewall:hetzner-disconnect        admin
 firewall:hetzner-switch            admin

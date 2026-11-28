@@ -1,13 +1,20 @@
 /** Moves System Tweaks' firewall protocols to Firewall, after `cloudflare-ips` was renamed `firewall`. */
 import { errorMessage } from "../../lib/errors";
-import { addonConfigFile, addonStateDir } from "../../lib/paths";
+import { addonConfigFile, addonStateDir, CLOUDFLARE_STATE_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
+import { isIP } from "node:net";
+import { join } from "node:path";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import {
+  edgeDefaultsDigest, hasActiveEdgeDefaults, MAX_SKIP_IPS, SSL_LABELS, SSL_MODES, type EdgeDefaults, type SslMode,
+} from "../../lib/cloudflare/edge";
+import { readCloudflareConnections } from "../../lib/cloudflare/store";
 import { withFileLockSync } from "../../lib/file-lock";
 import { isTrustedFile } from "../../lib/trusted-file";
 import { log } from "../../lib/log";
 import { ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, lockedAddons, writeLockedAddons } from "../../lib/root-locks";
 import { DEFAULT_CLOUDFLARE_ACTION_PATHS } from "./action";
+import { DEFAULT_EDGE_PATHS } from "./edge";
 import { DEFAULT_FIREWALL_PATHS } from "./protocols";
 import { DEFAULT_VISITOR_IP_PATHS, MAPS_MARKER } from "./visitor-ip";
 
@@ -260,5 +267,223 @@ export function migrateVisitorIp(
     undo();
     log.warn(`System Tweaks' Cloudflare visitor IPs setting was not moved to Firewall: ${errorMessage(error)}`);
     return null;
+  }
+}
+
+export interface CloudflareEdgeMigrationPaths {
+  dnsPolicy: string;
+  dnsConfig: string;
+  cloudflareStateDir: string;
+  firewallConfig: string;
+  firewallPolicy: string;
+  firewallStateDir: string;
+  edgeConfig: string;
+  visitorIpState: string;
+  rootUid: number;
+  /** Whether Firewall was already enabled before earlier migrations in this pass created firewall.conf. */
+  firewallWasEnabled?: boolean;
+  now?: () => number;
+}
+
+const DEFAULT_EDGE_MIGRATION_PATHS: CloudflareEdgeMigrationPaths = {
+  dnsPolicy: join(addonStateDir("dns"), "policy.json"),
+  dnsConfig: addonConfigFile("dns"),
+  cloudflareStateDir: CLOUDFLARE_STATE_DIR,
+  firewallConfig: addonConfigFile("firewall"),
+  firewallPolicy: DEFAULT_CLOUDFLARE_ACTION_PATHS.policyFile,
+  firewallStateDir: addonStateDir("firewall"),
+  edgeConfig: join(DEFAULT_EDGE_PATHS.stateDir, "cloudflare-edge.json"),
+  visitorIpState: DEFAULT_VISITOR_IP_PATHS.stateFile,
+  rootUid: process.getuid?.() ?? 0,
+};
+
+function snapshotTrusted(path: string, expectedUid: number): SavedFile | null {
+  if (!existsSync(path)) return null;
+  const info = lstatSync(path);
+  if (!isTrustedFile(info, expectedUid)) throw new Error(`refusing untrusted migration file ${path}`);
+  return { path, text: readFileSync(path, "utf8"), mode: info.mode & 0o777, uid: info.uid, gid: info.gid };
+}
+
+function legacyProfilesWithZone(policy: Record<string, unknown> | null): Record<string, unknown>[] {
+  if (!policy || !Array.isArray(policy.profiles)) return [];
+  return policy.profiles.filter((entry): entry is Record<string, unknown> =>
+    Boolean(entry) && typeof entry === "object" && !Array.isArray(entry) && Object.hasOwn(entry, "zone"));
+}
+
+/** Whether `migrateCloudflareEdgeFromDns` has legacy profile zone options to move. */
+export function cloudflareEdgeMigrationPending(paths: Partial<CloudflareEdgeMigrationPaths> = {}): boolean {
+  const p = { ...DEFAULT_EDGE_MIGRATION_PATHS, ...paths };
+  try {
+    const raw = legacySettings(readFileSync(p.dnsPolicy, "utf8"));
+    return legacyProfilesWithZone(raw).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Moves Cloudflare whole-zone options (`ssl`, `alwaysHttps`, `acmeFullSsl`,
+ * `webmailFullSsl`, `skipFirewallIps`) out of DNS's `policy.json` profiles
+ * into Firewall's `/var/lib/clp-addons/firewall/cloudflare-edge.json`, keeping
+ * live zones intact.
+ *
+ * - Prefers profiles assigned to sites/redirects (or the default profile),
+ *   falling back to all profiles when none are assigned.
+ * - If relevant profiles disagree on SSL/TLS mode or Always Use HTTPS, leaves
+ *   the disagreeing setting unset (`null`), leaves approval off, and records a
+ *   migration note so live zones are never silently changed.
+ * - If DNS was Automatic with Cloudflare connected and unambiguous active edge
+ *   options, migrates them as already approved so new zones continue without
+ *   review holds; when DNS was enabled and Firewall was disabled, enables
+ *   Firewall with `autoEnableNewSites: false` and visitor IPs off (unless
+ *   already configured) so upgrading changes no Nginx files unexpectedly.
+ */
+export function migrateCloudflareEdgeFromDns(
+  enable: () => void,
+  paths: Partial<CloudflareEdgeMigrationPaths> = {},
+): (() => void) | null {
+  const p = { ...DEFAULT_EDGE_MIGRATION_PATHS, ...paths };
+  let source: SavedFile | null;
+  try {
+    source = snapshotTrusted(p.dnsPolicy, p.rootUid);
+  } catch (error) {
+    throw new Error(`DNS's Cloudflare edge options were not moved to Firewall: ${errorMessage(error)}`);
+  }
+  if (!source) return null;
+  const parsed = legacySettings(source.text);
+  const profilesWithZone = legacyProfilesWithZone(parsed);
+  if (!parsed || !profilesWithZone.length) return null;
+
+  const allProfiles = (parsed.profiles as unknown[]).filter((entry): entry is Record<string, unknown> =>
+    Boolean(entry) && typeof entry === "object" && !Array.isArray(entry));
+
+  const activeIds = new Set<string>();
+  if (parsed.assignments && typeof parsed.assignments === "object" && !Array.isArray(parsed.assignments)) {
+    for (const id of Object.values(parsed.assignments as Record<string, unknown>)) {
+      if (typeof id === "string" && id) activeIds.add(id);
+    }
+  }
+  if (Array.isArray(parsed.redirects)) {
+    for (const entry of parsed.redirects) {
+      const profileId = entry && typeof entry === "object" ? (entry as { profileId?: unknown }).profileId : null;
+      if (typeof profileId === "string" && profileId) activeIds.add(profileId);
+    }
+  }
+  if (typeof parsed.defaultProfileId === "string" && parsed.defaultProfileId) activeIds.add(parsed.defaultProfileId);
+
+  const relevant = activeIds.size > 0
+    ? allProfiles.filter((profile) => typeof profile.id === "string" && activeIds.has(profile.id))
+    : allProfiles;
+  const chosen = relevant.length > 0 ? relevant : allProfiles;
+
+  const zoneObjects = chosen.map((profile) =>
+    profile.zone && typeof profile.zone === "object" && !Array.isArray(profile.zone)
+      ? profile.zone as Record<string, unknown>
+      : {});
+
+  const sslValues = [...new Set(zoneObjects.map((zone) => SSL_MODES.find((mode) => mode === zone.ssl) ?? null))];
+  const httpsValues = [...new Set(zoneObjects.map((zone) => typeof zone.alwaysHttps === "boolean" ? zone.alwaysHttps : null))];
+
+  const notes: string[] = [];
+  let ssl: SslMode | null = null;
+  if (sslValues.length === 1) ssl = sslValues[0]!;
+  else if (sslValues.length > 1) {
+    const labels = sslValues.map((mode) => mode ? SSL_LABELS[mode] : "Leave as it is");
+    notes.push(`Legacy DNS profiles disagreed on SSL/TLS mode (${labels.join(" vs ")}), so SSL/TLS was left unchanged.`);
+  }
+  let alwaysHttps: boolean | null = null;
+  if (httpsValues.length === 1) alwaysHttps = httpsValues[0]!;
+  else if (httpsValues.length > 1) {
+    const labels = httpsValues.map((value) => value === null ? "Leave as it is" : value ? "On" : "Off");
+    notes.push(`Legacy DNS profiles disagreed on Always Use HTTPS (${labels.join(" vs ")}), so it was left unchanged.`);
+  }
+
+  const panelHostSet = typeof parsed.panelHost === "string" && parsed.panelHost.trim().length > 0;
+  const acmeFullSsl = zoneObjects.some((zone) => zone.acmeFullSsl === true) || panelHostSet;
+  const webmailFullSsl = zoneObjects.some((zone) => zone.webmailFullSsl === true);
+  const allSkipIps = [...new Set(zoneObjects.flatMap((zone) =>
+    Array.isArray(zone.skipFirewallIps)
+      ? zone.skipFirewallIps.filter((ip): ip is string => typeof ip === "string" && isIP(ip.trim()) !== 0).map((ip) => ip.trim().toLowerCase())
+      : []))]
+    .sort();
+  if (allSkipIps.length > MAX_SKIP_IPS) {
+    throw new Error(
+      `DNS's Cloudflare edge options were not moved to Firewall: selected DNS profiles contain ${allSkipIps.length} distinct WAF skip IPs, which exceeds Firewall's limit of ${MAX_SKIP_IPS}. Reduce skipFirewallIps in ${p.dnsPolicy} to at most ${MAX_SKIP_IPS} distinct IPs and retry.`,
+    );
+  }
+  const skipFirewallIps = allSkipIps;
+
+  const defaults: EdgeDefaults = { ssl, alwaysHttps, acmeFullSsl, webmailFullSsl, skipFirewallIps };
+  const migrationNote = notes.length ? `${notes.join(" ")} Review and approve your Cloudflare edge defaults here.` : null;
+
+  let sharedConnections = 0;
+  try {
+    sharedConnections = readCloudflareConnections({ stateDir: p.cloudflareStateDir, rootUid: p.rootUid }).length;
+  } catch { /* ignore unreadable store */ }
+  const hasCloudflare = sharedConnections > 0 || (Array.isArray(parsed.connections) && parsed.connections.length > 0);
+  const approved = parsed.automatic === true && existsSync(p.dnsConfig) && hasCloudflare && hasActiveEdgeDefaults(defaults) && migrationNote === null;
+  const nowIso = new Date((p.now ?? Date.now)()).toISOString();
+
+  const directoryExisted = existsSync(p.firewallStateDir);
+  const originals = new Map<string, SavedFile | null>();
+  const keep = (path: string) => { if (!originals.has(path)) originals.set(path, snapshotTrusted(path, p.rootUid)); };
+  const undo = () => {
+    for (const [path, before] of [...originals].reverse()) {
+      if (before) restore(before); else rmSync(path, { force: true });
+    }
+    if (!directoryExisted && existsSync(p.firewallStateDir)) {
+      try { rmdirSync(p.firewallStateDir); } catch { /* non-empty */ }
+    }
+  };
+
+  try {
+    const existingEdge = snapshotTrusted(p.edgeConfig, p.rootUid);
+    if (!existingEdge) {
+      keep(p.edgeConfig);
+      writeFileAtomic(p.edgeConfig, `${JSON.stringify({
+        version: 1,
+        defaults,
+        approved,
+        approvedAt: approved ? nowIso : null,
+        approvedDigest: approved ? edgeDefaultsDigest(defaults) : null,
+        knownZones: [],
+        zoneChoices: {},
+        migrationNote,
+      }, null, 2)}\n`, { mode: 0o600, owner: { uid: p.rootUid, gid: process.getgid?.() ?? 0 }, createParent: true });
+    }
+
+    const cleanedProfiles = (parsed.profiles as unknown[]).map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+      const { zone: _dropped, ...rest } = entry as Record<string, unknown>;
+      return rest;
+    });
+    keep(source.path);
+    restore({ ...source, text: `${JSON.stringify({ ...parsed, profiles: cleanedProfiles }, null, 2)}\n` });
+
+    if (!existingEdge && approved && existsSync(p.dnsConfig) && !existsSync(p.firewallConfig) && p.firewallWasEnabled !== true) {
+      const policy = snapshotTrusted(p.firewallPolicy, p.rootUid);
+      let fwPolicy: Record<string, unknown> | null = null;
+      try { fwPolicy = policy ? legacySettings(policy.text) : null; } catch { fwPolicy = null; }
+      if (fwPolicy?.autoEnableNewSites === true) {
+        keep(p.firewallPolicy);
+        restore({ ...policy!, text: `${JSON.stringify({ ...fwPolicy, autoEnableNewSites: false }, null, 2)}\n` });
+        log.warn("Firewall's Enable on new sites was switched off: it was saved while Firewall was disabled");
+      }
+      if (!snapshotTrusted(p.visitorIpState, p.rootUid)) {
+        keep(p.visitorIpState);
+        writeFileAtomic(p.visitorIpState, `${JSON.stringify({ version: 1, enabled: false }, null, 2)}\n`, {
+          mode: 0o600,
+          owner: { uid: p.rootUid, gid: process.getgid?.() ?? 0 },
+          createParent: true,
+        });
+      }
+      keep(p.firewallConfig);
+      enable();
+    }
+
+    return undo;
+  } catch (error) {
+    undo();
+    throw new Error(`DNS's Cloudflare edge options were not moved to Firewall: ${errorMessage(error)}`);
   }
 }

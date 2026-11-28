@@ -2,10 +2,12 @@
 
 Firewall holds who may reach the server's sites and ports: CloudPanel's
 per-site "Allow traffic from Cloudflare only" setting across every site,
-Cloudflare visitor IPs for site access logs and PHP, a protocol for each rule on
-CloudPanel's own Firewall page, a Cloudflare Access gate in front of the panel,
-and Hetzner Cloud Firewalls or netcup firewall policies that let only Cloudflare
-reach the web ports and the panel.
+Cloudflare visitor IPs for site access logs and PHP, Cloudflare zone-wide edge
+defaults (SSL/TLS mode, Always Use HTTPS, Let's Encrypt and webmail Full SSL
+rules, and WAF skip IPs), a protocol for each rule on CloudPanel's own Firewall
+page, a Cloudflare Access gate in front of the panel, and Hetzner Cloud
+Firewalls or netcup firewall policies that let only Cloudflare reach the web
+ports and the panel.
 
 ## Cloudflare-only sites
 
@@ -44,11 +46,13 @@ restored afterwards. A per-site switch acts immediately without confirmation,
 because turning one site off is the ordinary correction after a bulk change.
 The page uses the shared `.section-shell` to split Cloudflare only (the site
 table with "Enable on new sites" and Cloudflare visitor IPs directly under it),
-Panel gate (the gate card and the shared Cloudflare connections card),
-Protocols, and Cloud firewall when a matching Hetzner Cloud Firewall or netcup
-firewall card is present. Provider cards appear only on that cloud host or when
-a credential is saved, and the Cloud firewall section is omitted when neither is
-present.
+Cloudflare edge (zone-wide edge defaults, reachable zones, recent edge changes,
+and the shared Cloudflare connections card, replaced by a focused first-run
+connect card while no Cloudflare connection is saved), Panel gate (the gate card
+and a link or connect card for shared Cloudflare connections), Protocols, and
+Cloud firewall when a matching Hetzner Cloud Firewall or netcup firewall card is
+present. Provider cards appear only on that cloud host or when a credential is
+saved, and the Cloud firewall section is omitted when neither is present.
 
 Selection checkboxes stay separate from the per-site switch, and the
 selected-scope actions are unavailable until something is selected. On desktop,
@@ -228,6 +232,131 @@ CloudPanel v3: CloudPanel's own migration carries the rules, and keying by
 port range and source is what lets the choices follow them. Without the addon,
 a UDP rule comes back as TCP.
 
+## Cloudflare edge defaults
+
+Zone-wide Cloudflare edge settings and rules belong to Firewall, not to DNS
+profiles: every site in a zone shares them, and Firewall stays decoupled from
+`addons/dns` with zero imports from `addons/dns` (enforced by
+`tests/test-cloudflare-store.test.ts`). Pure defaults parsing, rule specs, and
+change/conflict planning live in `lib/cloudflare/edge.ts` so `lib/cloudflare/tokens.ts`
+and `lib/cloudflare/store.ts` compute required token permissions without
+importing either addon. Firewall's runtime controller lives in
+`addons/firewall/edge.ts`.
+
+### Settings and rules
+
+`EdgeDefaults` manages five zone-wide controls:
+
+- **SSL/TLS mode** (`off`, `flexible`, `full`, `strict`, or `null` to leave alone),
+  defaulting to `strict` (Full (strict)).
+- **Always Use HTTPS** (`true`, `false`, or `null` to leave alone), defaulting
+  to `true`.
+- **Full SSL for Let's Encrypt checks** (`acmeFullSsl`, default `true`): a
+  zone-wide `http_config_settings` rule setting `ssl: "full"` on
+  `starts_with(http.request.uri.path, "/.well-known/acme-challenge/")`.
+- **Full SSL for webmail hosts** (`webmailFullSsl`, default `false`): a
+  zone-wide `http_config_settings` rule setting `ssl: "full"` on
+  `starts_with(http.host, "webmail.")`.
+- **WAF skip IPs** (`skipFirewallIps`, default empty, up to 20 IPv4/IPv6
+  addresses): a zone-wide `http_request_firewall_custom` rule skipping
+  `http_request_sbfm` and `http_request_firewall_managed` for `ip.src in {...}`.
+
+Managed rules use refs `clp_fw_acme`, `clp_fw_webmail`, and `clp_fw_skip`, and
+also recognize legacy DNS refs `clp_dns_acme`, `clp_dns_webmail`, and
+`clp_dns_skip` as well as equivalent enabled rules written by another tool such
+as Terraform so upgrades and existing zones never duplicate rules when no
+competing rule overlaps the same target. Competing foreign rules are checked
+before accepting either a matching managed rule or an equivalent foreign rule,
+so an overlapping rule (such as a foreign ACME rule setting Flexible SSL beside
+Full SSL) holds the zone as a conflict instead of reporting it synced. When
+applying a zone, rules are written before zone settings so the ACME Full SSL
+rule is in place before SSL switches to Full (strict). Only settings and phases
+managed by the current or previous defaults, or by a tracked managed rule, are
+read, so a rule-only token without Zone Settings Edit or Zone WAF Edit does not
+hit 403 on unused endpoints. `cloudflare-edge-status.json` keeps managed-rule
+cleanup tracking (`trackedManagedRules`) keyed by Cloudflare zone ID separately
+from the reachable `zones` list and clears a rule key only after a successful
+ruleset read proves that managed rule is gone, so a temporarily unreachable
+connection never drops cleanup for an active WAF skip or config rule.
+
+### Approve-once flow and destructive/conflict guards
+
+State lives in root-owned `0600` files under `/var/lib/clp-addons/firewall/`
+(`cloudflare-edge.json`, `cloudflare-edge-status.json`, and
+`cloudflare-edge-pending.json`), serialized under
+`/run/clp-addons/firewall-edge.lock` taken before `cloudflare.lock`. Page loads
+read only local files and make zero Cloudflare API calls.
+
+1. **Before approval (`approved: false`).** Firewall reads reachable Cloudflare
+   zones (active and pending, ignoring moved, deleted, and deactivated zones)
+   and previews changes without writing. Saving a draft updates
+   `cloudflare-edge.json` without touching Cloudflare. Per-zone review and
+   confirmation (`edge-review-zone` and single-zone `edge-confirm`) are
+   refused on the server and hidden in the UI until defaults are approved.
+2. **Approve once (`edge-save` with `approve: true` -> `edge-confirm`).** Root
+   reads live Cloudflare zones, builds a review with a 15-minute random token
+   and SHA-256 plan digest, and stores it in `cloudflare-edge-pending.json`.
+   Confirming re-reads live Cloudflare state, verifies both config hash and
+   plan digest (showing a fresh review if Cloudflare changed in between),
+   applies changes to non-blocked zones, records `approved: true` with
+   `approvedDigest`, and logs each write.
+3. **Automatic inheritance for new zones.** While `approved` is true and
+   `approvedDigest` matches the saved defaults, `edge-check`, the 15-minute
+   repair pass, and Firewall's `newSites` hook automatically apply safe
+   (non-destructive, non-conflicting) defaults to new or newly discovered zones
+   with no per-site review hold.
+4. **Explicit confirmation for destructive changes and conflicts.** Even after
+   approval, automatic reconciliation never overwrites a zone that has:
+   - an **SSL downgrade** (lowering rank among `off < flexible < full < strict`,
+     or changing an unknown mode);
+   - **Always Use HTTPS switched off** (`on` to `off`);
+   - **removing a managed rule or removing IPs from a managed WAF skip rule**;
+   - **a managed rule disabled or edited in Cloudflare**;
+   - **a conflicting foreign rule** targeting the ACME path, `webmail.` host, or
+     overlapping IP WAF skip (a single exact-expression foreign rule holds for
+     confirmation via `edge-review-zone`; multiple or compound foreign rules, or
+     a foreign rule competing beside a managed or equivalent rule, block until
+     resolved in Cloudflare);
+   - **zone name ambiguity or an unavailable saved zone choice**: saved
+     `zoneChoices` resolve before single-candidate fallback so a temporary
+     inventory outage on the chosen account holds the zone name as a conflict
+     instead of switching to another account.
+
+   Guarded zones stay untouched with status `needs_review` or `conflict`, raise
+   an Action needed item in Setup, and apply only after the operator confirms
+   the per-zone review (`edge-review-zone` -> `edge-confirm`, available once
+   defaults are approved). Editing approved defaults always plans and reviews
+   across zones before saving; pausing (`pause: true`) turns off automatic
+   enforcement immediately with no writes.
+
+### Token permissions and upgrade migration
+
+`Zone Settings: Edit`, `Config Rules: Edit`, and `Zone WAF: Edit` live in
+`lib/cloudflare/tokens.ts` as `edge` permissions: required on Firewall when the
+corresponding default is enabled and optional on DNS. The shared Connect
+Cloudflare dialog offers independent checkboxes for DNS records, Cloudflare edge
+defaults, and Panel gate so operators can mint minimal or combined tokens.
+
+`migrateCloudflareEdgeFromDns` in `addons/firewall/migration.ts` (run from
+`cli/addons.ts` under `dns.lock` -> `firewall-edge.lock` -> `cloudflare.lock`,
+with full rollback on failure) moves legacy `zone` blocks out of
+`dns/policy.json` profiles into `firewall/cloudflare-edge.json` without
+importing `addons/dns`. It aggregates active assigned/default profiles (falling
+back to all profiles when unassigned), sets `acmeFullSsl` when any relevant
+profile enabled it or `panelHost` was set, treats an unmanaged (`null` or
+omitted) SSL/TLS mode or Always Use HTTPS beside a set value as a disagreement
+(leaving the setting `null` with a `migrationNote` and `approved: false`), and
+refuses migration before writing or removing legacy state if the combined
+`skipFirewallIps` union exceeds `MAX_SKIP_IPS` (20). Unambiguous active options
+are marked `approved: true` only when DNS is enabled (`dns.conf` exists) and
+Automatic with Cloudflare connected. When DNS is enabled with approved options
+and Firewall was disabled, the migration enables Firewall with
+`autoEnableNewSites: false` and `visitor-ip.json` set to `enabled: false` (when
+absent) so live Nginx configs stay untouched. If migration fails during
+`cli/repair.ts` while legacy DNS state is still pending, repair skips DNS's
+repair hook, and DNS's `savePolicy` preserves unmigrated per-profile `zone`
+blocks on disk until `migrateCloudflareEdgeFromDns` finishes and strips them.
+
 ## Panel gate
 
 ### The threat
@@ -301,12 +430,13 @@ CloudPanel's custom domain is a server block of the sites' Nginx,
   `/.well-known` itself. While the origin certificate is still valid, normal
   renewals succeed over Full (strict) through that Access Bypass without DNS
   enabled. If the origin certificate is already expired or not yet issued under
-  Full (strict), Cloudflare refuses the origin handshake unless DNS's
-  `clp_dns_acme` rule (Full SSL for `/.well-known/acme-challenge/*`, installed
-  when DNS manages the zone with `acmeFullSsl` on) is present; Full still
-  presents the origin-pull certificate. Without DNS, recovering an expired
-  certificate under Full (strict) requires switching SSL mode temporarily to
-  Full or turning the gate off over SSH with `clp-addons firewall panel-gate off`.
+  Full (strict), Cloudflare refuses the origin handshake unless Firewall's
+  `clp_fw_acme` (or legacy `clp_dns_acme`) rule for
+  `/.well-known/acme-challenge/*` is present under Cloudflare edge defaults;
+  Full still presents the origin-pull certificate. Without that rule, recovering
+  an expired certificate under Full (strict) requires switching SSL mode
+  temporarily to Full or turning the gate off over SSH with
+  `clp-addons firewall panel-gate off`.
   Port 80 is not involved: the custom domain's server only redirects there, and
   `ssl_verify_client` applies to TLS connections alone.
 

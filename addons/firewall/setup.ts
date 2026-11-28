@@ -3,11 +3,13 @@ import { listCloudflareSecrets } from "../../lib/cloudflare/store";
 import type { CloudSetupState } from "./cloud-firewall";
 import { hetznerSetupState } from "./hetzner";
 import { netcupSetupState } from "./netcup";
+import { edgeActionNeeded, edgeSetupCheck, type EdgeOptions } from "./edge";
 import { panelGateActionNeeded, panelGateSummary, type GateOptions, type PanelGateView } from "./panel-gate";
 
 const CARD = "/addons/firewall/#hetzner-card";
 const NETCUP_CARD = "/addons/firewall/#netcup-card";
 const GATE_CARD = "/addons/firewall/#panel-gate-card";
+const EDGE_CARD = "/addons/firewall/#fw-edge-card";
 /** Repair reads the provider every 15 minutes and records when; this many missed in a row is a credential it refuses, or a provider that does not answer. */
 export const HETZNER_QUIET_MS = 60 * 60_000;
 
@@ -76,6 +78,11 @@ export const FIREWALL_SETUP: SetupStep[] = [
     check: () => netcupCheck(netcupSetupState()),
   },
   {
+    id: "cloudflare-edge", level: "sites", title: "Cloudflare edge defaults", href: EDGE_CARD,
+    why: "Sets zone-wide SSL/TLS mode, Always Use HTTPS, Full SSL rules and WAF skip IPs once so new Cloudflare zones inherit them automatically.",
+    check: (options) => edgeSetupCheck(options?.edge as EdgeOptions | undefined),
+  },
+  {
     id: "panel-gate", level: "domain", title: "Panel gate", href: GATE_CARD, requires: ["panel-hostname"],
     why: "Requires a Cloudflare Access email sign-in before anyone reaches CloudPanel's login screen and closes direct port 8443.",
     check: (options) => {
@@ -89,6 +96,7 @@ export const FIREWALL_SETUP: SetupStep[] = [
 export const FIREWALL_ACTIONS: ActionNeededCheck[] = [
   { id: "hetzner-token", check: () => hetznerActions(hetznerSetupState()) },
   { id: "netcup-sign-in", check: () => netcupActions(netcupSetupState()) },
+  { id: "cloudflare-edge", check: (options) => edgeActionNeeded(options?.edge as EdgeOptions | undefined) },
   // Local files and the drift repair recorded; it never calls Cloudflare.
   { id: "panel-gate", title: "Panel gate needs attention", href: GATE_CARD, check: (options) => panelGateActionNeeded(options?.gate as GateOptions | undefined) },
 ];

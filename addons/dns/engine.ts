@@ -29,7 +29,6 @@ import {
   describeRedirect, foundRedirect, PLACEHOLDER, REDIRECT_PHASE, redirectAction, redirectHosts, redirectRef, redirectRuleState, standInHosts, wantedRedirectRule,
   type FoundRedirect,
 } from "./redirects";
-import { ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
 
 const RECORD_COMMENT = "Managed by CloudPanel DNS";
 
@@ -182,25 +181,18 @@ export const PANEL_PROFILE_ID = "panel-hostname";
 
 /**
  * What the panel hostname is held to: its addresses here, proxied only once
- * CloudPanel has its certificate, and the rule that lets the renewals through.
+ * CloudPanel has its certificate.
  */
 export function panelProfile(proxied: boolean): Profile {
   const row = (type: "A" | "AAAA", content: string) => ({ type, name: "{domain}", content, proxied, ttl: 1, priority: null, apexOnly: false });
   return {
     id: PANEL_PROFILE_ID, name: "Panel hostname", records: [row("A", "{ipv4}"), row("AAAA", "{ipv6}")], mailcow: false,
-    zone: { ssl: null, alwaysHttps: null, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] },
   };
-}
-
-/** The profiles a token is held to: the policy's, and the panel hostname's while one is set. */
-export function tokenProfiles(policy: Pick<Policy, "profiles" | "panelHost">): Profile[] {
-  return policy.panelHost ? [...policy.profiles, panelProfile(false)] : policy.profiles;
 }
 
 interface ZoneState {
   ref: ZoneRef;
   records: DnsRecord[] | null;
-  settings: Map<string, string>;
   rulesets: Map<string, CfRuleset | null>;
   error: string | null;
 }
@@ -251,7 +243,6 @@ export class DnsRun {
   private sourceDkim: MailcowDkim | null | { error: string } | undefined;
   private readonly failures = new Map<string, string[]>();
   private readonly diffs = new Map<string, Diff>();
-  private profilesByZone: Map<string, Profile[]> | null = null;
   private readonly providers = new Map<string, DnsProvider>();
   private readonly connectionMeta: { id: string; label: string; provider: ProviderKind }[];
   private readonly mailcow: MailcowApi | null;
@@ -451,55 +442,25 @@ export class DnsRun {
     return this.context.policy.profiles.find((profile) => profile.id === id) ?? null;
   }
 
-  /** Every assigned site's profile in each zone that supports zone settings or rules. */
-  private zoneProfiles(withHeld = true): Map<string, Profile[]> {
-    if (withHeld && this.profilesByZone) return this.profilesByZone;
-    const byZone = new Map<string, Profile[]>();
-    for (const site of this.entries) {
-      if (this.context.panelOnly && !site.panel) continue;
-      const profile = this.profileOf(site.domain);
-      if (!profile || (!withHeld && this.held.has(site.domain))) continue;
-      if (site.redirect && this.onServer()) continue;
-      const resolved = this.resolve(site.domain);
-      if (resolved.kind !== "zone") continue;
-      const provider = this.providers.get(resolved.ref.connectionId);
-      if (!provider || (!provider.capabilities.zoneSettings && !provider.capabilities.zoneRules)) continue;
-      const key = zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id);
-      const list = byZone.get(key) ?? [];
-      list.push(profile);
-      byZone.set(key, list);
-    }
-    if (withHeld) this.profilesByZone = byZone;
-    return byZone;
-  }
-
   // -------------------------------------------------------------------------
   // Reading
   // -------------------------------------------------------------------------
 
-  private async loadZone(ref: ZoneRef, wants: ZoneWants, redirects = false): Promise<void> {
+  private async loadZone(ref: ZoneRef, redirects = false): Promise<void> {
     const provider = this.providers.get(ref.connectionId)!;
     const key = zoneMapKey(ref.connectionId, ref.zone.id);
-    const state: ZoneState = this.zones.get(key) ?? { ref, records: null, settings: new Map(), rulesets: new Map(), error: null };
+    const state: ZoneState = this.zones.get(key) ?? { ref, records: null, rulesets: new Map(), error: null };
     this.zones.set(key, state);
     try {
       const edge = provider.edge;
-      const settings = provider.capabilities.zoneSettings && edge
-        ? wantedSettings(wants).map((wanted) => wanted.setting).filter((setting) => !state.settings.has(setting))
+      const phases = edge && redirects && provider.capabilities.edgeRedirects && !state.rulesets.has(REDIRECT_PHASE)
+        ? [REDIRECT_PHASE]
         : [];
-      const phases = edge
-        ? [...new Set([
-          ...provider.capabilities.zoneRules ? wantedRules(wants).map((rule) => rule.phase) : [],
-          ...redirects && provider.capabilities.edgeRedirects ? [REDIRECT_PHASE] : [],
-        ])].filter((phase) => !state.rulesets.has(phase))
-        : [];
-      const [records, values, rulesets] = await Promise.all([
+      const [records, rulesets] = await Promise.all([
         state.records ?? provider.listRecords(ref.zone),
-        Promise.all(settings.map((setting) => edge!.setting(ref.zone.id, setting))),
         Promise.all(phases.map((phase) => edge!.entrypoint(ref.zone.id, phase))),
       ]);
       state.records = records;
-      settings.forEach((setting, index) => state.settings.set(setting, values[index]!));
       phases.forEach((phase, index) => state.rulesets.set(phase, rulesets[index]!));
     } catch (error) {
       state.error = reason(error);
@@ -546,9 +507,8 @@ export class DnsRun {
     ]);
   }
 
-  /** Reads what planning `domains` needs: their zones, those zones' settings and rules, and Mailcow. */
+  /** Reads what planning `domains` needs: their zones, redirect rulesets, and Mailcow. */
   async load(domains: string[]): Promise<void> {
-    const byZone = this.zoneProfiles();
     const refs = new Map<string, ZoneRef>();
     const redirectZones = new Set<string>();
     const mailDomains: string[] = [];
@@ -566,7 +526,7 @@ export class DnsRun {
       if (profile?.mailcow && !this.context.panelOnly) mailDomains.push(domain);
     }
     await Promise.all([
-      ...[...refs.entries()].map(([key, ref]) => this.loadZone(ref, zoneWants(byZone.get(key) ?? []).wants, redirectZones.has(key))),
+      ...[...refs.entries()].map(([key, ref]) => this.loadZone(ref, redirectZones.has(key))),
       this.loadMail(mailDomains),
     ]);
   }
@@ -629,21 +589,6 @@ export class DnsRun {
       plan.changes.push({ action: "note", subject: "Mailcow sender permission", detail: acl.error });
     } else if (!aclAllows(acl, domain)) {
       plan.changes.push({ action: "update", subject: "Mailcow sender permission", detail: `${settings.sharedMailbox} may send as @${domain}` });
-    }
-  }
-
-  private zoneChanges(state: ZoneState, wants: ZoneWants, plan: SitePlan): void {
-    for (const wanted of wantedSettings(wants)) {
-      const current = state.settings.get(wanted.setting);
-      if (current === undefined || current === wanted.value) continue;
-      const before = wanted.setting === "ssl" ? SSL_LABELS[current as keyof typeof SSL_LABELS] ?? current : current;
-      plan.changes.push({ action: "update", subject: "Zone setting, whole zone", detail: wanted.label, before, ...plan.held && { waits: true } });
-    }
-    for (const spec of wantedRules(wants)) {
-      if (!state.rulesets.has(spec.phase)) continue;
-      const found = ruleState(state.rulesets.get(spec.phase) ?? null, spec.rule);
-      if (found.state === "present") continue;
-      plan.changes.push({ action: found.state, subject: "Cloudflare rule, whole zone", detail: spec.label });
     }
   }
 
@@ -801,12 +746,6 @@ export class DnsRun {
     }
     if (state.error) plan.problems.push(state.error);
 
-    if (provider.capabilities.zoneSettings || provider.capabilities.zoneRules) {
-      // A profile that disagrees with another in its zone is stopped. What the plan shows is what this site's own profile asks.
-      const own = profile ? [profile] : [];
-      plan.problems.push(...zoneWants([...own, ...this.zoneProfiles().get(key) ?? []]).problems);
-      this.zoneChanges(state, zoneWants(own).wants, plan);
-    }
     if (redirect) {
       if (provider.capabilities.edgeRedirects) this.redirectRuleChange(state, redirect, plan);
       else this.planStandInChanges(redirect, plan, resolved.ref.zone.name);
@@ -1118,18 +1057,9 @@ export class DnsRun {
     await this.createZones(ready());
     const targets = ready().filter((plan) => plan.zone);
     if (!targets.length) return;
-    const byZone = this.zoneProfiles();
-    const reviewed = this.zoneProfiles(false);
 
     const planZoneKey = (plan: SitePlan) => zoneMapKey(plan.zone!.connectionId ?? "", plan.zone!.id);
 
-    await Promise.all([...new Set(targets.map(planZoneKey))].map((key) => {
-      const state = this.zones.get(key)!;
-      const provider = this.providers.get(state.ref.connectionId)!;
-      if (!provider.capabilities.zoneSettings && !provider.capabilities.zoneRules) return Promise.resolve();
-      const zoneDomains = targets.filter((plan) => planZoneKey(plan) === key).map((plan) => plan.domain);
-      return this.enforceZone(state, byZone.get(key) ?? [], reviewed.get(key) ?? [], zoneDomains);
-    }));
     await this.enforceMail(targets.filter((plan) => this.profileOf(plan.domain)?.mailcow).map((plan) => plan.domain));
 
     const after = ready().filter((plan) => plan.zone);
@@ -1191,53 +1121,12 @@ export class DnsRun {
         const key = zoneMapKey(createIn.connectionId, zone.id);
         this.createdZoneInfo.set(key, [...zone.nameServers]);
         this.zoneRefs.push(ref);
-        this.profilesByZone = null;
-        this.zones.set(key, { ref, records: null, settings: new Map(), rulesets: new Map(), error: null });
-        const profiles = domains.map((domain) => this.profileOf(domain)).filter((profile) => profile !== null);
-        await this.loadZone(ref, zoneWants(profiles).wants, domains.some((domain) => this.redirects.has(domain)));
+        this.zones.set(key, { ref, records: null, rulesets: new Map(), error: null });
+        await this.loadZone(ref, domains.some((domain) => this.redirects.has(domain)));
       } catch (error) {
         for (const domain of domains) this.fail(domain, error);
       }
     }));
-  }
-
-  /** `reviewed` leaves out held sites' profiles: their rules are written, their zone settings wait. */
-  private async enforceZone(state: ZoneState, profiles: Profile[], reviewed: Profile[], domains: string[]): Promise<void> {
-    const provider = this.providers.get(state.ref.connectionId)!;
-    const edge = provider.edge;
-    if (!edge) return;
-    const zoneId = state.ref.zone.id;
-    const { wants, problems } = zoneWants(profiles);
-    if (problems.length) return;
-    const zone = state.ref.zone.name;
-    try {
-      if (provider.capabilities.zoneSettings) {
-        for (const wanted of wantedSettings(zoneWants(reviewed).wants)) {
-          const current = state.settings.get(wanted.setting);
-          if (current === wanted.value) continue;
-          await edge.setSetting(zoneId, wanted.setting, wanted.value);
-          state.settings.set(wanted.setting, wanted.value);
-          const before = current === undefined ? undefined : wanted.setting === "ssl" ? SSL_LABELS[current as keyof typeof SSL_LABELS] ?? current : current;
-          this.logged([], zone, "update", "Zone setting, whole zone", wanted.label, before);
-        }
-      }
-      if (provider.capabilities.zoneRules) {
-        // Rules before records, so a proxied record never exists without the rule its certificate needs.
-        for (const spec of wantedRules(wants)) {
-          const ruleset = state.rulesets.get(spec.phase) ?? null;
-          const found = ruleState(ruleset, spec.rule);
-          if (found.state === "present") continue;
-          let updated: CfRuleset;
-          if (!ruleset) updated = await edge.createEntrypoint(zoneId, spec.phase, [spec.rule]);
-          else if (found.state === "update") updated = await edge.updateRule(zoneId, spec.phase, ruleset.id, found.ruleId, spec.rule);
-          else updated = await edge.addRule(zoneId, spec.phase, ruleset.id, spec.rule);
-          state.rulesets.set(spec.phase, updated);
-          this.logged([], zone, found.state === "update" ? "update" : "create", "Cloudflare rule, whole zone", spec.label);
-        }
-      }
-    } catch (error) {
-      for (const domain of domains) this.fail(domain, error);
-    }
   }
 
   private async enforceRedirectRule(state: ZoneState, redirect: Redirect): Promise<void> {
@@ -1393,7 +1282,6 @@ export class DnsRun {
 
   /** Reads every zone needed to check whether deleting `source` must also remove a Cloudflare Single Redirect rule. */
   async loadRedirectDeletion(source: string, tracked?: TrackedRedirectRule): Promise<void> {
-    const emptyWants = zoneWants([]).wants;
     const refs = new Map<string, ZoneRef>();
     const resolved = this.resolve(source);
     if (resolved.kind === "zone") {
@@ -1405,7 +1293,7 @@ export class DnsRun {
     for (const ref of this.cloudflareRedirectZones(source, tracked)) {
       refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
     }
-    await Promise.all([...refs.values()].map((ref) => this.loadZone(ref, emptyWants, true)));
+    await Promise.all([...refs.values()].map((ref) => this.loadZone(ref, true)));
   }
 
   /**

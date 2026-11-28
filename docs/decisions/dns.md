@@ -17,21 +17,22 @@ records are rows anyone can edit.
 ## Provider adapter and capabilities
 
 `addons/dns/provider.ts` defines the provider-neutral `DnsProvider` interface
-and `ProviderCapabilities` flags (`proxy`, `zoneSettings`, `zoneRules`,
-`edgeRedirects`, `createZone`, `autoTtl`, and `comments`). Before `diffRecords`
-runs, `normalizeRenderedForProvider` strips `proxied` when `!capabilities.proxy`
-and resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
+and `ProviderCapabilities` flags (`proxy`, `edgeRedirects`, `createZone`,
+`autoTtl`, and `comments`). Before `diffRecords` runs,
+`normalizeRenderedForProvider` strips `proxied` when `!capabilities.proxy` and
+resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
 `!capabilities.autoTtl`.
 
 - **Cloudflare (`addons/dns/cloudflare-provider.ts`).** Wraps
-  `lib/cloudflare/api.ts`, sets all seven capability flags to `true`, applies
-  per-record POST/PATCH/DELETE calls in order, and exposes zone settings,
-  rulesets, and Single Redirect rules behind `.edge`.
+  `lib/cloudflare/api.ts`, sets all five capability flags to `true`, applies
+  per-record POST/PATCH/DELETE calls in order, and exposes Single Redirect
+  rulesets behind `.edge`. Zone-wide SSL/TLS, Always Use HTTPS, Full SSL rules,
+  and WAF skip IPs live in [Firewall](firewall.md#cloudflare-edge-defaults).
 - **PowerDNS (`addons/dns/powerdns.ts`).** Talks to PowerDNS Authoritative
   Server HTTP API v1 over `ProviderHttp` (`redirect: "error"`, `X-API-Key`
   header, 15-second deadline, 8 MiB response cap). Capabilities have `proxy`,
-  `zoneSettings`, `zoneRules`, `edgeRedirects`, `autoTtl`, and `comments` set to
-  `false`, and `createZone` driven by the connection's `createZones` switch.
+  `edgeRedirects`, `autoTtl`, and `comments` set to `false`, and `createZone`
+  driven by the connection's `createZones` switch.
   - **Transport policy.** `parsePowerDnsUrl` accepts `https://` for any valid
     host and allows plain `http://` only for `localhost`, IPv4 loopback
     (`127.0.0.0/8`), RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`,
@@ -73,26 +74,26 @@ and resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
   or `records.ts`.
 
 Cloudflare-only UI controls hide when no Cloudflare connection exists (the Proxy
-column, the Cloudflare zone disclosure, and Find redirects in Cloudflare). When
-both Cloudflare and PowerDNS connections exist, proxy and zone controls note
-that they apply to Cloudflare zones only.
+column and Find redirects in Cloudflare). When both Cloudflare and PowerDNS
+connections exist, proxy controls note that they apply to Cloudflare zones only.
 
 On zones where `capabilities.edgeRedirects` is `false`, redirect domains keep
 their local stand-in site active on this server and write unproxied `A` and
 `AAAA` records pointing to this server's addresses instead of Cloudflare's
 `AAAA 100::` placeholder, while still applying non-web profile rows such as MX,
 SPF, and DKIM. On zones where `capabilities.proxy` is `false`, the panel
-hostname stays unproxied, skips the Cloudflare ACME rule, hands off to matching
-unproxied wildcards, and makes no proxy change when CloudPanel issues its
-certificate.
+hostname stays unproxied, hands off to matching unproxied wildcards, and makes
+no proxy change when CloudPanel issues its certificate.
 
 ## Profiles
 
-A profile is an ordered list of record rows plus the zone options below, and a
-mode. Sites are assigned in bulk, and one profile can be the default for new
-sites, as in Resource Limits and SMTP Relay; choosing a default or assigning a site
-records the site ids that exist then, so a default never reaches back over the
-fleet.
+A profile is an ordered list of record rows plus an optional Mailcow switch.
+Whole-zone Cloudflare edge settings (SSL/TLS mode, Always Use HTTPS, Full SSL
+rules, and WAF skip IPs) belong to [Firewall](firewall.md#cloudflare-edge-defaults)
+rather than DNS profiles. Sites are assigned in bulk, and one profile can be the
+default for new sites, as in Resource Limits and SMTP Relay; choosing a default
+or assigning a site records the site ids that exist then, so a default never
+reaches back over the fleet.
 
 A row has a type (A, AAAA, CNAME, MX, TXT, SRV, CAA), a name, content, proxy,
 TTL, a priority for MX and SRV, and "apex only", which skips the row when the
@@ -193,12 +194,12 @@ disclosures for Mailcow and Server addresses that open automatically when
 configured or overridden. The Activity section holds the change log.
 
 There is one switch for the whole addon, not one per profile: the operator
-decides once whether DNS may write, and every profile, zone option and missing
-zone follows it. It starts in Ask first, which reads Cloudflare and Mailcow and
-writes nothing; a bar above the sites says so, counts the changes and new zones
-waiting, and offers the review that turns on Automatic. Automatic makes the
-plan and keeps making it: every check corrects drift at the names the profiles
-own, deletes conflicting records there, and creates a site's missing zone.
+decides once whether DNS may write, and every profile and missing zone follows
+it. It starts in Ask first, which reads Cloudflare and Mailcow and writes
+nothing; a bar above the sites says so, counts the changes and new zones
+waiting, and offers the review that turns on Automatic. Automatic makes the plan
+and keeps making it: every check corrects drift at the names the profiles own,
+deletes conflicting records there, and creates a site's missing zone.
 
 A change that would alter what DNS writes once Automatic -- turning it on,
 editing a profile's rows or options, assigning sites, or changing the server
@@ -215,29 +216,12 @@ Ask first are saved directly.
 
 A policy file that has a mode on each profile instead is read as
 Automatic only when every profile that has sites enforced; otherwise it asks
-first, so no site starts being written without a review.
-
-## Zone options
-
-A profile can set the zone's SSL/TLS mode and Always Use HTTPS, and ask for
-three rules: Full SSL for `/.well-known/acme-challenge/`, Full SSL for
-`webmail.` hosts, and a skip of Super Bot Fight Mode and managed rules for
-listed addresses, such as a MainWP Dashboard. Cloudflare cannot skip the free
-Bot Fight Mode this way.
-
-These belong to the whole zone, so profiles in one zone that disagree stop each
-other's sites. Each rule
-is one zone-wide rule with a fixed `ref`, added to the phase's entrypoint beside
-whatever else is there, or updated in place; a rule that already does the same
-thing, such as one Terraform created, counts as present. A zone therefore uses
-at most one rule of each kind against its plan's quota. Rules are written before
-records, so a proxied record never exists without the rule its first
-certificate needs. The addon never deletes a rule.
-
-Proxied records with the ACME rule are the default because they work with
-Firewall's Cloudflare-only sites: Let's Encrypt's HTTP-01 request reaches the origin through
-Cloudflare with Full SSL while the origin still has CloudPanel's self-signed
-certificate.
+first, so no site starts being written without a review. Any legacy `zone` block
+left on a profile in `policy.json` is ignored by `parseProfile`, preserved on
+disk by `savePolicy` until `migrateCloudflareEdgeFromDns` finishes moving it to
+Firewall's Cloudflare edge state, and kept ahead of DNS repair by skipping DNS's
+repair hook in `cli/repair.ts` whenever startup migration fails while legacy DNS
+state is still pending.
 
 ## Redirect domains
 
@@ -263,10 +247,9 @@ Its profile's web rows are left out and every other row applies, so mail and
 its DKIM key follow the profile as they do for a site. A web row is derived,
 not marked: an A, AAAA or CNAME row whose rendered name is the source, its
 `www` or its `*.`. Nothing else could live there, since the placeholder needs the name, so
-no row needs a flag and no profile needs editing. The placeholder claims A and
-AAAA at each host, and so any CNAME there, which is what replaces the A and
-AAAA records a site or Terraform left. Zone options apply as for a site, and a
-missing zone is created the same way.
+no row needs a flag and no profile needs editing. The placeholder claims A and AAAA at each host, and so any CNAME there, which is
+what replaces the A and AAAA records a site or Terraform left. A missing zone is
+created the same way as for a site.
 
 A rule another tool wrote is taken over in place. Matching by `ref`, or by an
 equivalent rule as `ruleState` does for zone rules, would add a second rule
@@ -346,10 +329,9 @@ deletes both.
 
 The panel hostname is a third kind of entry beside sites and redirect domains,
 planned through the same switch, reviews, log and lock, with a fixed profile:
-A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone.
-Saving a panel hostname requires at least one Cloudflare connection, and `list`
-also exposes CloudPanel's existing custom domain when `panelHost` is unset so
-Settings can offer one-click adoption. While DNS is in Ask first, saving a
+A and AAAA at the name and no mail. Saving a panel hostname requires at least
+one DNS connection, and `list` also exposes CloudPanel's existing custom domain
+when `panelHost` is unset so Settings can offer one-click adoption. While DNS is in Ask first, saving a
 panel hostname reports that records wait until Automatic is turned on. When a
 panel hostname plan has a problem, the card shows the error once and hides the
 next-step CloudPanel prompt. The
@@ -369,11 +351,11 @@ serves a certificate a CA issued for it (`lib/panel-custom-domain.ts`), then
 proxied, or deleted when an unobstructed proxied wildcard in the zone already
 covers the hostname and matches the server's addresses. Saving the custom domain in CloudPanel writes the vhost with a
 placeholder certificate, the Let's Encrypt one about six seconds later, then
-`/etc/.clp_custom_domain`, all from one HTTP-01 check made at once. Direct, the
-check works whatever the zone's settings; proxied, it needs Full SSL, and under
-Flexible the vhost's redirect to HTTPS loops. Renewals come through Cloudflare
-once the name is proxied, which the ACME rule covers. CloudPanel has no
-`clpctl` command for its custom domain, so the operator enters it in the panel.
+`/etc/.clp_custom_domain`, all from one HTTP-01 check made at once. Direct, the check works whatever the zone's settings; proxied, it needs Full SSL,
+and under Flexible the vhost's redirect to HTTPS loops. Renewals come through
+Cloudflare once the name is proxied, which Firewall's Cloudflare edge ACME rule
+covers. CloudPanel has no `clpctl` command for its custom domain, so the
+operator enters it in the panel.
 
 The certificate watcher runs `sync-panel-host`, which compares the proxy state
 the last plan used with the one the certificate calls for and reaches Cloudflare
@@ -403,10 +385,9 @@ checkbox that auto-checks when the entered hostname belongs to a connected zone
 and unchecks with a note otherwise (adjusting proxy wording to the resolved
 zone's provider). Submitting CloudPanel's form with the checkbox ticked sends
 `POST /addons/dns/api/panel-host` with `{ name, prepareOnly: true }`, which
-plans only the panel hostname's `A`/`AAAA` records (unproxied on Cloudflare,
-with its ACME rule) against live provider records in both Automatic and Ask
-first modes without touching other sites, Mailcow, or other profiles' zone
-settings. A confirmation `<dialog>` shows the planned changes or problems;
+plans only the panel hostname's `A`/`AAAA` records (unproxied on Cloudflare)
+against live provider records in both Automatic and Ask first modes without
+touching other sites or Mailcow. A confirmation `<dialog>` shows the planned changes or problems;
 confirming sends `POST /addons/dns/api/confirm`, writes only the panel hostname
 while leaving `policy.automatic` unchanged, and returns the updated panel plan
 including `zone.status`, `zone.nameServers`, and `zoneCreated` when the pass
@@ -425,22 +406,24 @@ Cloudflare connections are shared across DNS and Firewall in the root-owned
 the manager's `/addons/api/cloudflare` routes as well as DNS's Settings tab.
 Both addons use the same Connect Cloudflare dialog
 (`lib/cloudflare/connect-dialog.ts`), where the operator selects scopes for DNS
-records, Panel gate, or both, and the template link updates live.
+records, Cloudflare edge defaults, Panel gate, or any combination, and the
+template link updates live.
 
 A connection is one API token. The dialog links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
 screen and never types an account ID. For DNS records the permissions are DNS
 Edit, Zone Edit, Account Settings Read, Single Redirect Edit and API Tokens
-Read, then the union of what the saved profiles use: Zone Settings Edit, Config
-Rules Edit and Zone WAF Edit. Single Redirect Edit is included before any
-redirect domain exists so finding redirects to take over works with the first
-token. API Tokens Read lets the token read its own permissions; it exposes token
-metadata, never a secret. Zone Edit is included for Automatic zone creation;
-Cloudflare refuses a zone create without it by naming `account.zone.create`,
-which the page reports as Zone Edit. Selecting Panel gate adds SSL and
-Certificates Edit, Access: Apps and Policies Edit, and Access: Organizations,
-Identity Providers, and Groups Edit. The URL uses the keys in Cloudflare's
+Read. Single Redirect Edit is included before any redirect domain exists so
+finding redirects to take over works with the first token. API Tokens Read lets
+the token read its own permissions; it exposes token metadata, never a secret.
+Zone Edit is included for Automatic zone creation; Cloudflare refuses a zone
+create without it by naming `account.zone.create`, which the page reports as
+Zone Edit. Selecting Cloudflare edge defaults adds Zone Settings Edit, Config
+Rules Edit, and Zone WAF Edit (when WAF skip IPs are configured). Selecting
+Panel gate adds SSL and Certificates Edit, Access: Apps and Policies Edit, and
+Access: Organizations, Identity Providers, and Groups Edit. The URL uses the
+keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
 plus `config_settings`, `zone_waf` and `dynamic_redirect`, which the reference
 leaves out but the dashboard accepts. The dashboard drops an unknown key without
@@ -455,8 +438,8 @@ a refused settings or rules read or write is reported with the permission it nee
 
 `lib/cloudflare/tokens.ts` is the single list of permissions: each entry records
 its dashboard label, template key, API permission group names, scope, consumer
-(`dns`, `firewall`, or `shared`), and what uses it. The token template, refusal
-messages, and permission tables in DNS and Firewall all derive from it.
+(`dns`, `edge`, `panelGate`, or `shared`), and what uses it. The token template,
+refusal messages, and permission tables in DNS and Firewall all derive from it.
 
 ### What a token holds
 
@@ -613,13 +596,13 @@ Creating a site points its names at this server, so a new site's records at
 names with no published records yet, including a missing `*.{domain}` wildcard,
 and its own address records at the site and `www`, are written at once with no
 review. If its profile would do more, such as update, delete or add beside an
-existing record at `*.{domain}` or another name, or change a zone setting, the
-site is held: its rules are still written, but the rest waits, through every
-later check, until an administrator reviews it. While an apex site's wildcard
-waits for review, `www` is left out of its certificate names. Placing the site in a profile by hand, or the
-page's Review changes, runs the usual review and clears the hold. Readiness
-ignores the held changes. One read of the panel that finds no sites changes no
-assignment.
+existing record at `*.{domain}` or another name, the site is held: its own
+address records are still written, and the rest waits, through every later
+check, until an administrator reviews it. While an apex site's wildcard waits
+for review, `www` is left out of its certificate names. Placing the site in a
+profile by hand, or the page's Review changes, runs the usual review and clears
+the hold. Readiness ignores the held changes. One read of the panel that finds
+no sites changes no assignment.
 
 Panel Tweaks' completion page calls `POST /addons/dns/api/provision` before it
 asks for a certificate. The route, and its CSRF session route, are reachable by

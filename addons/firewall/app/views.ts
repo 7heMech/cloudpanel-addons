@@ -7,9 +7,11 @@ import {
 import {
   CLOUDFLARE_SCOPE_JS, cloudflareAccessDetailsHtml, cloudflareConnectDialogHtml,
 } from "../../../lib/cloudflare/connect-dialog";
+import { SSL_LABELS } from "../../../lib/cloudflare/edge";
 import { mountPath } from "../../../lib/mount";
 import type { LockState } from "../../../lib/root-locks";
 import type { FirewallPageState } from "./service";
+import type { EdgeLogEntry, EdgePageView, EdgeZoneStatus } from "../edge";
 import { CLOUD_ROLES, ROLES, type CloudConnectedView, type CloudRole } from "../cloud-firewall";
 import { NETCUP_HOST } from "../netcup-api";
 
@@ -143,7 +145,7 @@ const NETCUP_DIALOG = `
     <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
   </form></dialog>`;
 
-/** The review a switch opens, in sections: what changes, the names that stop answering, and what closes. */
+/** The review a cloud firewall switch opens. */
 const REVIEW_DIALOG = `
   <dialog id="hz-review" aria-labelledby="hz-review-title"><form method="dialog">
     <div class="dialog-header"><h2 id="hz-review-title"></h2></div>
@@ -160,6 +162,19 @@ const REVIEW_DIALOG = `
       <button class="btn btn-primary" id="hz-review-accept" value="accept" type="submit">Turn on</button>
     </div>
   </form></dialog>`;
+
+/** Confirmation dialog for Cloudflare edge defaults approval, updates, and guarded per-zone changes. */
+const EDGE_REVIEW_DIALOG = `
+  <dialog id="fw-edge-review-dialog" class="fw-edge-review-dialog" aria-labelledby="fw-edge-review-title">
+    <div class="dialog-header"><h2 id="fw-edge-review-title">Review Cloudflare edge changes</h2></div>
+    <p id="fw-edge-review-text"></p>
+    <div class="notice fw-edge-review-warnings" id="fw-edge-review-warnings" hidden></div>
+    <div class="fw-edge-review-zones" id="fw-edge-review-zones"></div>
+    <div class="actions dialog-actions">
+      <button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button class="btn btn-primary" id="fw-edge-review-confirm" type="button" onclick="fwConfirmEdge()">Confirm</button>
+    </div>
+  </dialog>`;
 
 const ROLE_HINTS: Record<CloudRole, string> = {
   web: "Ports 80 and 443 answer only Cloudflare, so a site must be proxied through it.",
@@ -251,6 +266,14 @@ function panelGateAttention(view: FirewallPageState["panelGate"]): "bad" | "warn
   return undefined;
 }
 
+function edgeAttention(view: FirewallPageState["cloudflareEdge"]): "bad" | "warn" | undefined {
+  if ("error" in view) return "bad";
+  if (!view.connected) return undefined;
+  if (view.zones.some((zone) => zone.status === "error" || zone.status === "conflict")) return "bad";
+  if (view.zones.some((zone) => zone.status === "needs_review") || view.needsApproval || Boolean(view.migrationNote)) return "warn";
+  return undefined;
+}
+
 function cloudProviderAttention(view: FirewallPageState["hetzner"] | FirewallPageState["netcup"]): "bad" | "warn" | undefined {
   if (view.state === "error") return "bad";
   if (view.state !== "connected") return undefined;
@@ -313,7 +336,6 @@ function cloudflareConnectionsCard(cf: FirewallPageState["cloudflare"]): string 
       </div>
     </div>`;
   }).join("");
-  const data = esc(JSON.stringify({ connections: cf.connections.map(({ id, label }) => ({ id, label })), serverIps: cf.serverIps }));
   const body = cf.connections.length
     ? `<div class="dns-setting-list">${rows}</div>`
     : `<div class="hz-connect"><p class="hint">Connect a Cloudflare API token once. DNS and Firewall share the same connections.</p>
@@ -321,21 +343,203 @@ function cloudflareConnectionsCard(cf: FirewallPageState["cloudflare"]): string 
   const headerButton = cf.connections.length
     ? '<button class="btn" type="button" onclick="fwEditCloudflare(\'\')">Add Cloudflare connection</button>'
     : "";
-  const dialog = cloudflareConnectDialogHtml({
-    prefix: "fw-cf",
-    onSubmit: "fwSaveCloudflare(event)",
-    copyFn: "fwCopyText",
-    defaultDns: cf.dnsEnabled,
-    defaultPanelGate: true,
-    templates: cf.templates,
-    clipboardIcon: CLIPBOARD,
-  });
   return `
-    <div class="card hz-card" id="fw-cf-card" data-fw-cf="${data}">
+    <div class="card hz-card" id="fw-cf-card">
       <div class="card-header"><div><h2>Cloudflare connections</h2>
-        <p class="hint">Shared with DNS. Panel gate uses the connection whose token reaches CloudPanel's custom domain.</p></div>${headerButton}</div>
+        <p class="hint">Shared with DNS. Used by Cloudflare edge defaults and Panel gate.</p></div>${headerButton}</div>
       ${body}
-    </div>${dialog}`;
+    </div>`;
+}
+
+function formatUtcShort(iso: string | null): string {
+  if (!iso) return "";
+  return `${iso.replace("T", " ").slice(0, 16)} UTC`;
+}
+
+function zoneCurrentSummary(zone: EdgeZoneStatus): string {
+  const parts: string[] = [];
+  if (zone.current.ssl) parts.push(zone.current.ssl);
+  if (zone.current.alwaysHttps) parts.push(`Always HTTPS ${zone.current.alwaysHttps.toLowerCase()}`);
+  const rules = [
+    zone.current.acmeRule && "Let's Encrypt",
+    zone.current.webmailRule && "webmail",
+    zone.current.skipIps && zone.current.skipIps.length > 0 && `WAF skip (${zone.current.skipIps.length})`,
+  ].filter(Boolean);
+  const top = parts.length ? esc(parts.join(" · ")) : '<span class="tone-muted">—</span>';
+  const sub = rules.length ? `<span class="hint">${esc(`Rules: ${rules.join(", ")}`)}</span>` : "";
+  return `${top}${sub}`;
+}
+
+function zoneStatusCell(zone: EdgeZoneStatus, approved: boolean): string {
+  if (zone.status === "error") {
+    return `${badgeHtml("Error", "bad")}<span class="hint fw-edge-clamp" title="${esc(zone.error ?? "")}">${esc(zone.error ?? "Read failed")}</span>`;
+  }
+  if (zone.status === "conflict") {
+    const first = zone.conflicts[0] ?? "Conflicting Cloudflare rules";
+    return `${badgeHtml("Conflict", "bad")}<span class="hint fw-edge-clamp" title="${esc(first)}">${esc(first)}</span>`;
+  }
+  if (zone.status === "needs_review") {
+    const guarded = zone.changes.find((change) => change.destructive || change.conflict);
+    const reason = guarded?.reason ?? `${plural(zone.changes.length, "change")} require confirmation`;
+    return `${badgeHtml("Needs review", "warn")}<span class="hint fw-edge-clamp" title="${esc(reason)}">${esc(reason)}</span>`;
+  }
+  if (zone.status === "pending") {
+    const hint = approved
+      ? `${plural(zone.changes.length, "change")} pending`
+      : `${plural(zone.changes.length, "change")} wait for approval`;
+    return `${badgeHtml(approved ? "Pending" : "Waiting approval", "warn")}<span class="hint">${esc(hint)}</span>`;
+  }
+  const extra = zone.zoneStatus !== "active" ? `<span class="hint">Zone ${esc(zone.zoneStatus)}</span>` : "";
+  return `${badgeHtml("In sync", "ok")}${extra}`;
+}
+
+function zoneActionCell(zone: EdgeZoneStatus, approved: boolean): string {
+  if (zone.zoneChoices && zone.zoneChoices.length > 0) {
+    const opts = ['<option value="">Choose connection…</option>']
+      .concat(zone.zoneChoices.map((choice) =>
+        `<option value="${esc(`${choice.connectionId}/${choice.zoneId}`)}">${esc(choice.label)}</option>`))
+      .join("");
+    return `<select class="fw-edge-choice" aria-label="Choose Cloudflare connection for ${esc(zone.zoneName)}" onchange="fwChooseEdgeZone('${esc(zone.zoneName)}', this)">${opts}</select>`;
+  }
+  if (approved && (zone.status === "needs_review" || zone.status === "pending")) {
+    return `<button class="btn" type="button" onclick="fwReviewEdgeZone('${esc(zone.zoneKey)}')">Review</button>`;
+  }
+  return '<span class="tone-muted">—</span>';
+}
+
+function edgeLogRow(entry: EdgeLogEntry): string {
+  const before = entry.before ? `<span class="hint">Was: ${esc(entry.before)}</span>` : "";
+  return `<tr>
+    <td data-label="Time" class="fw-edge-log-time"><span class="hint">${esc(formatUtcShort(entry.at))}</span></td>
+    <td data-label="Zone"><strong>${esc(entry.zone)}</strong><span class="hint">${esc(entry.cause)}</span></td>
+    <td data-label="Change">${esc(entry.subject)}: ${esc(entry.detail)}${before}</td>
+  </tr>`;
+}
+
+function cloudflareEdgePanel(edge: FirewallPageState["cloudflareEdge"], cf: FirewallPageState["cloudflare"]): string {
+  if ("error" in edge) {
+    return `<div class="card hz-card" id="fw-edge-card"><h2>Cloudflare edge</h2><div class="alert" role="alert">${esc(edge.error)}</div></div>${cloudflareConnectionsCard(cf)}`;
+  }
+
+  // Unconfigured state: focused first-run card without empty tables or forms.
+  if (!edge.connected) {
+    return `
+      <div class="card fw-edge-setup" id="fw-edge-card">
+        <h2>Cloudflare edge defaults</h2>
+        <p class="hint">Set your zone-wide Cloudflare defaults once: SSL/TLS mode, Always Use HTTPS, Full SSL rules for Let's Encrypt and webmail, and WAF skip IPs. Once approved, new Cloudflare zones inherit them automatically while destructive changes and rule conflicts still ask first.</p>
+        <div class="actions"><button class="btn btn-primary" type="button" onclick="fwEditCloudflare('')">Connect Cloudflare</button></div>
+      </div>`;
+  }
+
+  const singleConn = cf.connections.length <= 1;
+  const migrationBanner = edge.migrationNote
+    ? `<div class="notice fw-edge-notice" role="status">${esc(edge.migrationNote)}</div>`
+    : "";
+
+  const approvalBanner = !edge.approved
+    ? `<div class="card split-card fw-edge-banner" id="fw-edge-approval-banner">
+        <div>
+          <div class="fw-edge-banner-head">${badgeHtml("Not approved", "warn")}<h2>Review and approve edge defaults</h2></div>
+          <p class="hint">Firewall reads your Cloudflare zones and writes nothing until you approve these defaults once. After approval, new zones inherit them automatically without per-site holds; SSL downgrades, disabling HTTPS, rule removals, and conflicts still ask for confirmation.</p>
+        </div>
+        <div class="actions fw-edge-banner-actions">
+          <button class="btn btn-primary" type="button" onclick="fwSaveEdge(true)">Review and approve</button>
+        </div>
+      </div>`
+    : "";
+
+  const headerStatus = edge.approved
+    ? `<p class="hint fw-edge-status-hint">${edge.approvedAt ? `Approved ${esc(formatUtcShort(edge.approvedAt))} · ` : ""}New zones inherit these defaults automatically; destructive changes and conflicts ask first.</p>`
+    : `<p class="hint fw-edge-status-hint">These defaults apply to every reachable Cloudflare zone once approved.</p>`;
+
+  const headerActions = edge.approved
+    ? `<div class="actions fw-edge-header-actions">
+        <button class="btn" type="button" onclick="fwPauseEdge()">Pause automatic</button>
+      </div>`
+    : "";
+
+  const sslOptions = ['<option value="">Leave as it is</option>']
+    .concat(Object.entries(SSL_LABELS).map(([value, label]) =>
+      `<option value="${value}"${edge.defaults.ssl === value ? " selected" : ""}>${label}</option>`))
+    .join("");
+  const httpsVal = edge.defaults.alwaysHttps === null ? "" : edge.defaults.alwaysHttps ? "on" : "off";
+
+  const defaultsCard = `
+    <div class="card hz-card" id="fw-edge-card">
+      <div class="card-header">
+        <div><div class="fw-edge-title-row"><h2>Cloudflare edge defaults</h2>${edge.approved ? badgeHtml("Approved", "ok") : ""}</div>${headerStatus}</div>
+        ${headerActions}
+      </div>
+      ${migrationBanner}
+      <form id="fw-edge-form" onsubmit="fwSaveEdgeForm(event)">
+        <div class="form-grid fw-edge-grid">
+          <div class="form-field">
+            <label for="fw-edge-ssl">SSL/TLS mode</label>
+            <select id="fw-edge-ssl" name="ssl">${sslOptions}</select>
+          </div>
+          <div class="form-field">
+            <label for="fw-edge-https">Always Use HTTPS</label>
+            <select id="fw-edge-https" name="alwaysHttps">
+              <option value=""${httpsVal === "" ? " selected" : ""}>Leave as it is</option>
+              <option value="on"${httpsVal === "on" ? " selected" : ""}>On</option>
+              <option value="off"${httpsVal === "off" ? " selected" : ""}>Off</option>
+            </select>
+          </div>
+        </div>
+        <div class="fw-edge-switches">
+          <label class="fw-edge-switch-row">
+            <span class="switch"><input type="checkbox" name="acmeFullSsl" ${edge.defaults.acmeFullSsl ? "checked" : ""}><span></span></span>
+            <span><strong>Full SSL for Let's Encrypt checks</strong><span class="hint">Lets a proxied site issue and renew certificates over HTTP-01 while Full (strict) and Cloudflare-only access are on.</span></span>
+          </label>
+          <label class="fw-edge-switch-row">
+            <span class="switch"><input type="checkbox" name="webmailFullSsl" ${edge.defaults.webmailFullSsl ? "checked" : ""}><span></span></span>
+            <span><strong>Full SSL for webmail hosts</strong><span class="hint">Uses Full SSL for proxied <code>webmail.*</code> hostnames whose origin is a mail server.</span></span>
+          </label>
+        </div>
+        <div class="form-field fw-edge-skip-field">
+          <label for="fw-edge-skip">Skip the firewall for</label>
+          <textarea id="fw-edge-skip" name="skipFirewallIps" rows="2" placeholder="203.0.113.7">${esc(edge.defaults.skipFirewallIps.join("\n"))}</textarea>
+          <div class="hint">Optional. One IP per line, such as a MainWP Dashboard. Skips Super Bot Fight Mode and managed WAF rules; Cloudflare cannot skip the free Bot Fight Mode.</div>
+        </div>
+        <div class="actions fw-edge-form-actions">
+          ${edge.approved
+            ? '<button class="btn btn-primary" type="submit">Review and save changes</button>'
+            : '<button class="btn" type="button" onclick="fwSaveEdge(false)">Save draft</button><button class="btn btn-primary" type="submit">Review and approve defaults</button>'}
+        </div>
+      </form>
+    </div>`;
+
+  const checkedText = edge.checkedAt ? `Checked ${formatUtcShort(edge.checkedAt)}` : "Not checked yet";
+  const zoneRows = edge.zones.map((zone) => `
+    <tr data-zone-key="${esc(zone.zoneKey)}">
+      <td class="site-cell"><strong>${esc(zone.zoneName)}</strong>${!singleConn && zone.connectionLabel ? `<span class="hint">${esc(zone.connectionLabel)}${zone.accountName ? ` · ${esc(zone.accountName)}` : ""}</span>` : zone.accountName ? `<span class="hint">${esc(zone.accountName)}</span>` : ""}</td>
+      <td data-label="Current edge">${zoneCurrentSummary(zone)}</td>
+      <td data-label="Status">${zoneStatusCell(zone, edge.approved)}</td>
+      <td data-label="Action" class="action-cell">${zoneActionCell(zone, edge.approved)}</td>
+    </tr>`).join("");
+
+  const zonesCard = `
+    <div class="card card-table" id="fw-edge-zones-card">
+      <div class="card-header">
+        <div><h2>Cloudflare zones</h2><p class="hint">${esc(edge.zones.length ? `${plural(edge.zones.length, "zone")} · ${checkedText}` : checkedText)}</p></div>
+        <div class="actions"><button class="btn" type="button" onclick="fwCheckEdge()">Check now</button></div>
+      </div>
+      ${edge.zones.length
+        ? `<div class="table-scroll"><table class="fleet-table fw-edge-zone-table">
+            <thead><tr><th scope="col">Zone</th><th scope="col">Current edge</th><th scope="col">Status</th><th scope="col" class="action-cell">Action</th></tr></thead>
+            <tbody>${zoneRows}</tbody>
+          </table></div>`
+        : '<div class="empty">No zones read yet. Choose Check now to inspect reachable Cloudflare zones.</div>'}
+    </div>`;
+
+  const logCard = edge.log.length
+    ? `<details class="card fw-edge-log-details" id="fw-edge-log">
+        <summary><strong>Recent edge changes</strong><span class="hint">${plural(edge.log.length, "change")}</span></summary>
+        <div class="table-scroll"><table class="fleet-table fw-edge-log-table"><tbody>${edge.log.slice(0, 20).map(edgeLogRow).join("")}</tbody></table></div>
+      </details>`
+    : "";
+
+  return `${approvalBanner}${defaultsCard}${zonesCard}${logCard}${cloudflareConnectionsCard(cf)}`;
 }
 
 export function dashboardView(state: FirewallPageState, lock: LockState = "unlocked"): string {
@@ -387,10 +591,37 @@ export function dashboardView(state: FirewallPageState, lock: LockState = "unloc
   const hetzner = hetznerCard(state.hetzner);
   const cloudPanel = `${netcup}${hetzner}`;
   const review = state.hetzner.state === "connected" || state.netcup.state === "connected" ? REVIEW_DIALOG : "";
-  const panelGatePanel = `${panelGateCard(state.panelGate)}${cloudflareConnectionsCard(state.cloudflare)}`;
+  const cfData = esc(JSON.stringify({ connections: state.cloudflare.connections.map(({ id, label }) => ({ id, label })), serverIps: state.cloudflare.serverIps }));
+  const cfDialog = cloudflareConnectDialogHtml({
+    prefix: "fw-cf",
+    onSubmit: "fwSaveCloudflare(event)",
+    copyFn: "fwCopyText",
+    defaultDns: state.cloudflare.dnsEnabled,
+    defaultEdge: true,
+    defaultPanelGate: true,
+    templates: state.cloudflare.templates,
+    clipboardIcon: CLIPBOARD,
+  }).replace('<dialog id="fw-cf-connection-dialog"', `<dialog id="fw-cf-connection-dialog" data-fw-cf="${cfData}"`);
+
+  const panelGateConnect = state.cloudflare.connections.length
+    ? `<div class="card split-card cf-policy">
+        <div><h2>Cloudflare connections</h2>
+          <p class="hint">Shared across Cloudflare edge defaults, Panel gate, and DNS (${plural(state.cloudflare.connections.length, "connection")} saved).</p></div>
+        <div class="actions"><a class="btn" href="#fw-cf-card">Manage connections</a></div>
+      </div>`
+    : `<div class="card split-card cf-policy">
+        <div><h2>Connect Cloudflare</h2>
+          <p class="hint">Connect a Cloudflare API token once. DNS, Cloudflare edge defaults, and Panel gate share the same connections.</p></div>
+        <div class="actions"><button class="btn btn-primary" type="button" onclick="fwEditCloudflare('')">Connect Cloudflare</button></div>
+      </div>`;
+  const panelGatePanel = `${panelGateCard(state.panelGate)}${panelGateConnect}`;
+  const edgePanel = cloudflareEdgePanel(state.cloudflareEdge, state.cloudflare);
+  const edgeCount = !("error" in state.cloudflareEdge) && state.cloudflareEdge.connected && state.cloudflareEdge.zones.length
+    ? state.cloudflareEdge.zones.length : undefined;
 
   const tabs: SectionTab[] = [
     { id: "sites", label: "Cloudflare only", count: total, attention: state.visitorIp.problem || (state.visitorIp.enabled && !state.visitorIp.applied) ? "warn" : undefined, content: sitesPanel },
+    { id: "edge", label: "Cloudflare edge", count: edgeCount, attention: edgeAttention(state.cloudflareEdge), content: edgePanel },
     { id: "panel-gate", label: "Panel gate", attention: panelGateAttention(state.panelGate), content: panelGatePanel },
     { id: "protocols", label: "Protocols", attention: "error" in state.protocols ? "bad" : undefined, content: protocolsCard(state.protocols) },
     ...(cloudPanel ? [{ id: "cloud", label: "Cloud firewall", attention: cloudAttention(state), content: cloudPanel }] : []),
@@ -398,7 +629,7 @@ export function dashboardView(state: FirewallPageState, lock: LockState = "unloc
 
   return `
     <div class="page-heading">
-      <div><h1>Firewall</h1><p>Cloudflare-only access and real visitor IPs for every site, a protocol for each rule on CloudPanel's Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
+      <div><h1>Firewall</h1><p>Cloudflare-only access, visitor IPs, and zone-wide edge defaults for every site, a protocol for each rule on CloudPanel's Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
     </div>
-    ${sectionShellHtml("firewall", "Firewall sections", tabs, "sites")}${review}`;
+    ${sectionShellHtml("firewall", "Firewall sections", tabs, "sites")}${cfDialog}${EDGE_REVIEW_DIALOG}${review}`;
 }

@@ -12,6 +12,7 @@ export const DNS_ADDON: AddonDefinition = {
   description: "Keep each site's DNS records to a profile across Cloudflare or PowerDNS, with Mailcow set up for its mail.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.3.0-rc.1", note: "Cloudflare zone-wide edge settings (SSL/TLS mode, Always Use HTTPS, Let's Encrypt and webmail Full SSL rules, and WAF skip IPs) moved out of DNS profiles into Firewall's Cloudflare edge tab. Existing zone options migrate automatically on upgrade." },
     { in: "2.3.0-rc.1", note: "With Panel Tweaks' automatic SSL on, a new site whose DNS zone was just created now waits for its nameservers (shown to copy) instead of requesting a certificate that would fail. With DNS also on Automatic, self-signed sites made outside Create Site in the last 15 minutes, such as with clpctl, are queued for a certificate request once DNS is ready." },
     { in: "2.3.0-rc.1", note: "CloudPanel's Admin → Settings Custom Domain form now offers a Random hostname button, connected-zone suggestions, and a checkbox to write the DNS record before CloudPanel requests its Let's Encrypt certificate." },
     { in: "2.3.0-rc.1", note: "DNS now supports PowerDNS Authoritative API v1 alongside Cloudflare. Profiles are provider-neutral: Cloudflare-only proxy and zone settings hide when no Cloudflare connection is configured, and redirects on PowerDNS keep local stand-in sites with server A/AAAA records." },

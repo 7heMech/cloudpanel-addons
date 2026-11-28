@@ -111,7 +111,8 @@ test("a fleet table gives the domain its own line on a phone", () => {
       hetzner: { state: "absent" },
       netcup: { state: "absent" },
       panelGate: { error: "not read" },
-      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, both: { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
+      cloudflareEdge: { connected: false, defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] },
+      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, edge: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, "dns+edge": { url: "", permissions: [] }, "dns+panelGate": { url: "", permissions: [] }, "edge+panelGate": { url: "", permissions: [] }, "dns+edge+panelGate": { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');

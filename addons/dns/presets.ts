@@ -2,7 +2,7 @@
  * Rows a profile can start from. A preset only fills the editor: once saved,
  * the rows are the profile's own and nothing here changes them.
  */
-import type { Policy, Profile, RecordTemplate, ZoneOptions } from "./model";
+import type { Policy, Profile, RecordTemplate } from "./model";
 import { EMPTY_MAILCOW } from "./model";
 
 type Row = Partial<RecordTemplate> & Pick<RecordTemplate, "type" | "name" | "content">;
@@ -17,7 +17,6 @@ export interface Preset {
   records: RecordTemplate[];
   /** Turned on with the rows, because the rows need it. */
   mailcow?: boolean;
-  zone?: Partial<ZoneOptions>;
 }
 
 export const PRESETS: Preset[] = [
@@ -30,7 +29,6 @@ export const PRESETS: Preset[] = [
       row({ type: "A", name: "*.{domain}", content: "{ipv4}", proxied: true, apexOnly: true }),
       row({ type: "AAAA", name: "*.{domain}", content: "{ipv6}", proxied: true, apexOnly: true }),
     ],
-    zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true },
   },
   {
     id: "mailcow",
@@ -45,7 +43,6 @@ export const PRESETS: Preset[] = [
       row({ type: "CNAME", name: "webmail.{domain}", content: "{mailcow.host}", proxied: true, apexOnly: true }),
     ],
     mailcow: true,
-    zone: { webmailFullSsl: true },
   },
   {
     id: "google",
@@ -62,10 +59,6 @@ export const PRESETS: Preset[] = [
   },
 ];
 
-const EMPTY_ZONE_OPTIONS: ZoneOptions = {
-  ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [],
-};
-
 /** A profile built from presets, as a new install offers them. */
 function seeded(id: string, name: string, presetIds: string[]): Profile {
   const chosen = PRESETS.filter((preset) => presetIds.includes(preset.id));
@@ -74,7 +67,6 @@ function seeded(id: string, name: string, presetIds: string[]): Profile {
     name,
     records: chosen.flatMap((preset) => preset.records.map((record) => ({ ...record }))),
     mailcow: chosen.some((preset) => preset.mailcow),
-    zone: Object.assign({ ...EMPTY_ZONE_OPTIONS }, ...chosen.map((preset) => preset.zone ?? {})),
   };
 }
 

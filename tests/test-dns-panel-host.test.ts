@@ -69,11 +69,10 @@ describe("the panel hostname", () => {
     expect(() => parsePolicy({ ...seededPolicy(), panelHost: "not a name" })).toThrow();
   });
 
-  test("its profile points the name here and wants the Let's Encrypt rule, proxied only when asked", () => {
+  test("its profile points the name here, proxied only when asked", () => {
     const grey = panelProfile(false);
     expect(grey.id).toBe(PANEL_PROFILE_ID);
     expect(grey.records.map((row) => `${row.type} ${row.name} ${row.content} ${row.proxied}`)).toEqual(["A {domain} {ipv4} false", "AAAA {domain} {ipv6} false"]);
-    expect(grey.zone).toMatchObject({ ssl: null, alwaysHttps: null, acmeFullSsl: true });
     expect(panelProfile(true).records.every((row) => row.proxied)).toBe(true);
   });
 
@@ -94,7 +93,7 @@ describe("the panel hostname", () => {
     expect(saved.panelHost).toMatchObject({ name: "panel.example.com", problem: null, proxied: false, customDomain: null });
     expect(env.records()).toEqual(["A panel.example.com 203.0.113.10", "AAAA panel.example.com 2001:db8::10"]);
     const zone = env.cf.zones[0]!;
-    expect(env.cf.rulesets.get(`${zone.id}:http_config_settings`)!.rules.map((rule) => rule.ref)).toEqual(["clp_dns_acme"]);
+    expect(env.cf.rulesets.get(`${zone.id}:http_config_settings`)).toBeUndefined();
     expect(saved.panelHost!.plan!.certificateNames).toEqual([]);
     expect(dashboardContent(saved)).toContain("Next: enter panel.example.com under");
 
@@ -121,7 +120,7 @@ describe("the panel hostname", () => {
     await env.act("save-connection", { token: TOKEN });
     const saved = await env.act("set-panel-host", { name: "panel.example.com" });
     expect(saved.review).toBeUndefined();
-    expect(saved.panelHost!.plan!.changes.map((change) => change.subject).sort()).toEqual(["A panel.example.com", "AAAA panel.example.com", "Cloudflare rule, whole zone"]);
+    expect(saved.panelHost!.plan!.changes.map((change) => change.subject).sort()).toEqual(["A panel.example.com", "AAAA panel.example.com"]);
     expect(dashboardContent(saved)).toContain("DNS asks first, so the record is written once you turn on Automatic.");
     env.custom.current = { name: "panel.example.com", issued: true };
     expect(await DNS_ADDON.certificates!.run(env.options)).toBeNull();
@@ -323,7 +322,7 @@ describe("the panel hostname", () => {
     const plan = prepared.review!.sites[0]!;
     expect(plan.domain).toBe("panel.example.com");
     expect(plan.zone).toMatchObject({ name: "example.com", status: "active", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] });
-    expect(plan.changes.map((c) => c.subject).sort()).toEqual(["A panel.example.com", "AAAA panel.example.com", "Cloudflare rule, whole zone"]);
+    expect(plan.changes.map((c) => c.subject).sort()).toEqual(["A panel.example.com", "AAAA panel.example.com"]);
     expect(env.cf.writes()).toEqual([]);
 
     const confirmed = await env.act("confirm", { token: prepared.review!.token });

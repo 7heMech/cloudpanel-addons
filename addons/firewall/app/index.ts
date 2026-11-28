@@ -147,5 +147,42 @@ export async function handle(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
+  if (req.method === "POST" && path === "/api/edge/check") {
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
+    const result = await firewallService.checkEdge();
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/defaults") {
+    const body = await readMutation(req, 8192);
+    if (body instanceof Response) return body;
+    const result = await firewallService.saveEdge(body);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/confirm") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.token !== "string" || !body.token) return jsonResponse({ ok: false, error: "review token is required" }, 400);
+    const result = await firewallService.confirmEdge(body.token);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/review-zone") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.zoneKey !== "string" || !body.zoneKey) return jsonResponse({ ok: false, error: "zoneKey is required" }, 400);
+    const result = await firewallService.reviewEdgeZone(body.zoneKey);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/zone-choice") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    const result = await firewallService.chooseEdgeZone(body);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
   return jsonResponse({ ok: false, error: "not found" }, 404);
 }

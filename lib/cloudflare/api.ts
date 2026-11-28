@@ -454,8 +454,8 @@ export class CloudflareApi {
     }
   }
 
-  async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[]): Promise<CfRuleset> {
-    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules }));
+  async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[], name = "CloudPanel DNS"): Promise<CfRuleset> {
+    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name, kind: "zone", phase, rules }));
     return parseRuleset(result);
   }
 

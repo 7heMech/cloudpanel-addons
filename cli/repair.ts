@@ -1,5 +1,8 @@
 import { errorMessage } from "../lib/errors";
+import type { AddonSpec } from "../lib/addon-definition";
 import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
+import { cloudflareEdgeMigrationPending } from "../addons/firewall/migration";
+import { legacyDnsCloudflarePending } from "../lib/cloudflare/store";
 import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
@@ -47,16 +50,38 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     await runAnchorWork(quiet);
     return;
   }
+  let migrationFailed = false;
   try {
     // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
     migrateOldAddonNames(quiet, 0);
   } catch (error) {
+    migrationFailed = true;
     log.warn(`renamed addons were not moved yet: ${errorMessage(error)}`);
   }
-  await repairAll(positional, flags, quiet);
+  await repairAll(positional, flags, quiet, migrationFailed);
 }
 
-async function repairAll(positional: string[], flags: Record<string, string | true>, quiet: boolean): Promise<void> {
+/**
+ * Excludes DNS from repair hooks when startup migration failed while legacy
+ * DNS state is still pending, so repair does not queue a DNS reconcile pass
+ * that contends on `dns.lock` before migration completes.
+ */
+export function repairTargets(
+  all: AddonSpec[],
+  migrationFailed: boolean,
+  dnsMigrationPending: () => boolean = () => cloudflareEdgeMigrationPending() || legacyDnsCloudflarePending(),
+): AddonSpec[] {
+  if (!migrationFailed || !dnsMigrationPending()) return all;
+  log.warn("DNS repair skipped until pending DNS migration completes");
+  return all.filter((spec) => spec.name !== "dns");
+}
+
+async function repairAll(
+  positional: string[],
+  flags: Record<string, string | true>,
+  quiet: boolean,
+  migrationFailed = false,
+): Promise<void> {
   const specs = positional[0] ? [resolveAddon(positional[0])] : enabledAddons();
   const all = enabledAddons();
   // An installation with every addon disabled still needs its timer, its Nginx
@@ -103,7 +128,7 @@ async function repairAll(positional: string[], flags: Record<string, string | tr
   // its own `nginx -t` and skips the reload if that fails, so running this
   // while the master vhost might still be broken would leave a just-restored
   // site vhost on disk but unloaded until the next 15-minute cycle.
-  await runAddonRepairs(all);
+  await runAddonRepairs(repairTargets(all, migrationFailed));
   await runManagerRepair();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }

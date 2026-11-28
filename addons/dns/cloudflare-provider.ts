@@ -1,7 +1,7 @@
 /**
  * Cloudflare implementation of `DnsProvider`, wrapping the shared
- * `lib/cloudflare/api.ts` client and exposing Cloudflare-only zone settings,
- * rulesets, and redirect rules through `.edge`.
+ * `lib/cloudflare/api.ts` client and exposing Cloudflare Single Redirect
+ * rules through `.edge`.
  */
 import { CloudflareApi } from "../../lib/cloudflare/api";
 import { readTokenAccess } from "../../lib/cloudflare/store";
@@ -13,8 +13,6 @@ import type {
 
 export const CLOUDFLARE_CAPABILITIES: ProviderCapabilities = {
   proxy: true,
-  zoneSettings: true,
-  zoneRules: true,
   edgeRedirects: true,
   createZone: true,
   autoTtl: true,
@@ -31,8 +29,6 @@ export class CloudflareDnsProvider implements DnsProvider {
   constructor(token: string, fetcher?: ApiFetch, backoff?: { until: number }) {
     this.api = new CloudflareApi(token, fetcher, backoff);
     this.edge = {
-      setting: (zoneId, setting) => this.api.setting(zoneId, setting),
-      setSetting: (zoneId, setting, value) => this.api.setSetting(zoneId, setting, value),
       entrypoint: (zoneId, phase) => this.api.entrypoint(zoneId, phase),
       createEntrypoint: (zoneId, phase, rules) => this.api.createEntrypoint(zoneId, phase, rules),
       addRule: (zoneId, phase, rulesetId, rule) => this.api.addRule(zoneId, phase, rulesetId, rule),

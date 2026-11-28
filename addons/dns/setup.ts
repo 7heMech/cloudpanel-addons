@@ -5,7 +5,6 @@ import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
 import { addonStateDir, CLOUDFLARE_STATE_DIR } from "../../lib/paths";
 import { readState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
-import { tokenProfiles } from "./engine";
 import { parsePolicy, parseSecrets, type Policy } from "./model";
 import { seededPolicy } from "./presets";
 
@@ -94,7 +93,7 @@ export function permissionActions(state: DnsSetupState): ActionNeeded[] {
   return state.policy.connections.flatMap((connection) => {
     const report = state.reports.find((entry) => entry.id === connection.id);
     if (!report?.active || !state.tokens.has(connection.id)) return [];
-    const { missing } = connectionPermissions(report, tokenProfiles(state.policy));
+    const { missing } = connectionPermissions(report, undefined, { includeDns: true, includeEdge: false, requirePanelGate: false });
     if (!missing.length) return [];
     return [{
       title: missing.length > 1 ? "Cloudflare token needs permissions" : "Cloudflare token needs a permission",

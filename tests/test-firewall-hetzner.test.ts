@@ -767,7 +767,8 @@ describe("off Hetzner Cloud", () => {
       panelGate: { on: false, hostname: null, pending: false, problems: [], drift: [], editUrl: null, checkedAt: null, leftover: false },
       hetzner: { state: "absent" },
       netcup: { state: "absent" },
-      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, both: { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
+      cloudflareEdge: { connected: false, defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] },
+      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, edge: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, "dns+edge": { url: "", permissions: [] }, "dns+panelGate": { url: "", permissions: [] }, "edge+panelGate": { url: "", permissions: [] }, "dns+edge+panelGate": { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
     });
     expect(html).not.toContain('id="hetzner-card"');
     expect(html).not.toContain("Hetzner Cloud Firewall");

@@ -94,7 +94,21 @@ const protocols = { available: true, enabled: true, protocols: {}, udpPorts: [] 
 const hetzner = { state: "absent" as const };
 const netcup = { state: "absent" as const };
 const panelGate = { error: "not read" };
-const cloudflare = { connections: [], templates: { dns: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, both: { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false };
+const cloudflareEdge = { connected: false, defaults: { ssl: "strict" as const, alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] };
+const cloudflare = {
+  connections: [],
+  templates: {
+    dns: { url: "", permissions: [] },
+    edge: { url: "", permissions: [] },
+    panelGate: { url: "", permissions: [] },
+    "dns+edge": { url: "", permissions: [] },
+    "dns+panelGate": { url: "", permissions: [] },
+    "edge+panelGate": { url: "", permissions: [] },
+    "dns+edge+panelGate": { url: "", permissions: [] },
+  },
+  serverIps: [],
+  dnsEnabled: false,
+};
 
 test("dashboard puts the sites first, with the summary in their header and the new-site switch below", () => {
   const html = dashboardView({
@@ -105,6 +119,7 @@ test("dashboard puts the sites first, with the summary in their header and the n
     hetzner,
     netcup,
     panelGate,
+    cloudflareEdge,
     cloudflare,
   });
   expect(html).not.toContain("Enable all sites");
@@ -119,13 +134,13 @@ test("dashboard puts the sites first, with the summary in their header and the n
   expect(html).not.toContain("<script>alert(1)</script>");
   // Under six sites the table fits on a screen and needs no search.
   expect(html).not.toContain('id="fleet-find"');
-  expect(dashboardView({ autoEnableNewSites: true, visitorIp, sites: [], protocols, hetzner, netcup, panelGate, cloudflare })).toContain("No sites found in CloudPanel.");
+  expect(dashboardView({ autoEnableNewSites: true, visitorIp, sites: [], protocols, hetzner, netcup, panelGate, cloudflareEdge, cloudflare })).toContain("No sites found in CloudPanel.");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
 });
 
 test("six sites bring a search and an Off only toggle", () => {
   const sites = ["a", "b", "c", "d", "e", "f"].map((name, index) => site(`${name}.example.test`, index % 2 === 0));
-  const html = dashboardView({ autoEnableNewSites: false, visitorIp, sites, protocols, hetzner, netcup, panelGate, cloudflare });
+  const html = dashboardView({ autoEnableNewSites: false, visitorIp, sites, protocols, hetzner, netcup, panelGate, cloudflareEdge, cloudflare });
   expect(html).toContain('id="fleet-find"');
   expect(html).toContain('<label class="btn cf-off-only" id="fleet-show"><input class="visually-hidden" type="checkbox" value="off" data-group="Status" onchange="pickFleetFilter()">Off only</label><span class="hint" id="fleet-summary"');
   expect(html).not.toContain("fleet-show-menu");
@@ -138,14 +153,14 @@ test("six sites bring a search and an Off only toggle", () => {
 });
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {
-  const html = dashboardView({ autoEnableNewSites: true, visitorIp, sites: [site("a.example.test", true)], protocols, hetzner, netcup, panelGate, cloudflare });
+  const html = dashboardView({ autoEnableNewSites: true, visitorIp, sites: [site("a.example.test", true)], protocols, hetzner, netcup, panelGate, cloudflareEdge, cloudflare });
   expect(html).toContain('<th scope="col" class="action-cell" data-sort="enabled">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
   expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
 });
 
 test("the Protocols card switches the protocols and names the UDP ports they open", () => {
-  const view = (status: Parameters<typeof dashboardView>[0]["protocols"]) => dashboardView({ autoEnableNewSites: false, visitorIp, sites: [], protocols: status, hetzner, netcup, panelGate, cloudflare });
+  const view = (status: Parameters<typeof dashboardView>[0]["protocols"]) => dashboardView({ autoEnableNewSites: false, visitorIp, sites: [], protocols: status, hetzner, netcup, panelGate, cloudflareEdge, cloudflare });
   const open = view({ available: true, enabled: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] });
   expect(open).toContain(`CloudPanel's <a href="/admin/firewall">Firewall</a> page`);
   expect(open).toContain("UDP ports open: 53, 3478-3479.");
