@@ -68,7 +68,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons disable <addon>` | Disable an addon and keep its data. |
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
-| `clp-addons share-usage on\|off\|status` | Opt in or out of weekly enabled-addon counts, or print the exact payload. |
+| `clp-addons share-usage on\|off\|status` | Opt in to sharing addon usage with the daily update check, opt out and delete it, or print what is sent. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 | `clp-addons terminal root allow <user>` | Let one administrator with 2FA open a root terminal from the panel; `deny` takes it back, and allowing again clears a verification lockout. |
 | `clp-addons lock <addon>` | Let the panel switch an addon's protections on but never off (new installs lock System Tweaks); `unlock` reverses it. |
@@ -127,6 +127,15 @@ non-Cloudflare public proxy lose visitor IPs, site users can no longer run
 block an address from HTTPS on every site for an hour (also starting `fail2ban`
 if it is installed but stopped). Read [System Tweaks](docs/system-tweaks.md)
 before enabling it.
+
+### What does it send?
+
+Once a day, its version, release channel and architecture to `clp.7he.dev` to
+check for updates. If you opt in on the Setup page, also a random ID, the
+enabled addons, the CloudPanel version and how often each addon action ran,
+which decides which addons get maintained. No domains, site names or user
+names, and nothing is shared with third parties. See
+[What does it send?](SECURITY.md#what-does-it-send-and-to-whom)
 
 ### Can I uninstall, and what happens when CloudPanel updates?
 

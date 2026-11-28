@@ -13,7 +13,7 @@ import { mountPath, splitMount } from "../lib/mount";
 import { gatewayCaller } from "../lib/gateway-client";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { refreshPanelLogos } from "../lib/panel-logos";
-import { checkCliUpdate } from "../lib/update-check";
+import { savedUpdate } from "../lib/update-check";
 import { handleManagerRoute } from "./index";
 import { latestManagerJobView, panelHolds, seenNews, setupAction } from "./service";
 import { applyRequestOrigin, proxyHostFromRequest } from "./setup";
@@ -88,7 +88,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     return jsonResponse({ ok: true, service: "clp-addons" });
   }
 
-  const update = await checkCliUpdate(CLI_VERSION);
+  const update = savedUpdate(CLI_VERSION);
   const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
 
   const managerRoute = await handleManagerRoute(req, path, server, update, gate.auth ?? null);

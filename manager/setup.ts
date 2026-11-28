@@ -15,7 +15,8 @@ import { withPanelDb } from "../lib/panel-db";
 import { addonStateDir, CONFIG_DIR, PANEL_DB } from "../lib/paths";
 import { readState } from "../lib/root-state";
 import { panelUserUid } from "../lib/sso-auth";
-import { usagePayload, usageSharingStatus, type UsagePayload } from "../lib/usage-share";
+import { usageSharingStatus } from "../lib/usage-share";
+import type { CheckRequest } from "../lib/update-check";
 
 const PREFS_FILE = `${addonStateDir("manager")}/setup.json`;
 /** The checks' last answer, before anyone's skips, so moving between pages does not run them all again. */
@@ -72,8 +73,8 @@ export interface SetupView {
   enabledAddons?: string[];
   /** Step ids this administrator skipped, so request-time unblocking still honors skips. */
   skippedIds?: string[];
-  /** Root's usage-sharing answer and the exact payload it covers. */
-  usageSharing?: { answered: boolean; enabled: boolean; payload: UsagePayload };
+  /** Root's usage-sharing answer and the daily check's body as this server would send it. */
+  usageSharing?: { answered: boolean; enabled: boolean; lastSentAt: string | null; payload: CheckRequest };
 }
 
 interface UserPrefs { hidden?: true; skipped?: string[] }
@@ -379,8 +380,7 @@ export async function setupView(
 
 function readUsageSharingView(): SetupView["usageSharing"] | null {
   try {
-    const { answered, enabled, payload } = usageSharingStatus(usagePayload(Object.values(ADDONS).filter(addonEnabled).map((spec) => spec.name)));
-    return { answered, enabled, payload };
+    return usageSharingStatus(Object.values(ADDONS).filter(addonEnabled).map((spec) => spec.name));
   } catch {
     return null;
   }

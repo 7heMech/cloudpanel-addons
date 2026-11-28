@@ -27,7 +27,7 @@ import {
   readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
 } from "../manager/setup";
 import { SETUP_GUIDES } from "../manager/setup-guides";
-import { INLINE_ACTIONS, setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
+import { compactJson, INLINE_ACTIONS, setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
 import { setupErrorPage } from "../manager/views";
 
 const uid = process.getuid!();
@@ -923,34 +923,40 @@ describe("Setup client and route contracts", () => {
 
   test("usage sharing card renders at top while unanswered and collapses to a bottom toggle once answered", async () => {
     const step = { id: "one", level: "secure" as const, title: "One", href: "/addons/x/", addon: null, state: "todo" as const, reason: "r" };
-    const payload = { version: "2.1.0", cloudpanel: "2.5.4", arch: "x64", addons: ["dns", "system-tweaks"] };
+    const payload = {
+      version: "2.2.0", channel: "stable" as const, arch: "x64",
+      usage: { id: "3f9c1e7a2b6d4058a1c9e0f7b2d4a6c8", cloudpanel: "2.5.4", addons: ["dns", "system-tweaks"], activity: { dns: { list: 3 } } },
+    };
 
     const unanswered = setupPanelHtml({
       off: false, hidden: false, actions: [], steps: [step],
-      usageSharing: { answered: false, enabled: false, payload },
+      usageSharing: { answered: false, enabled: false, lastSentAt: null, payload },
     });
-    expect(unanswered).toContain("Help prioritize what gets maintained");
+    expect(unanswered).toContain("Help decide which addons get maintained");
+    expect(unanswered).toContain("never shared with third parties");
     expect(unanswered.toLowerCase()).not.toContain("telemetry");
-    expect(unanswered).toContain(JSON.stringify(payload, null, 2).replaceAll('"', "&quot;"));
-    expect(unanswered).toContain('<input type="checkbox" name="enabled" checked> Share enabled addons');
+    expect(unanswered).toContain(compactJson(payload).replaceAll('"', "&quot;"));
+    expect(compactJson(payload)).toContain('"addons": ["dns", "system-tweaks"]');
+    expect(JSON.parse(compactJson(payload))).toEqual(payload);
+    expect(unanswered).toContain('<input type="checkbox" name="enabled"> Share addon usage');
     expect(unanswered).toContain('type="submit">Save</button>');
     expect(unanswered.indexOf("setup-share")).toBeLessThan(unanswered.indexOf("setup-sheet"));
     expect(unanswered).not.toContain("setup-share-line");
 
     const answeredOn = setupPanelHtml({
       off: false, hidden: false, actions: [], steps: [step],
-      usageSharing: { answered: true, enabled: true, payload },
+      usageSharing: { answered: true, enabled: true, lastSentAt: null, payload },
     });
-    expect(answeredOn).not.toContain("Help prioritize what gets maintained");
+    expect(answeredOn).not.toContain("Help decide which addons get maintained");
     expect(answeredOn).toContain("setup-share-line");
-    expect(answeredOn).toContain('aria-label="Share enabled addons" checked');
+    expect(answeredOn).toContain('aria-label="Share addon usage" checked');
     expect(answeredOn.indexOf("setup-share-line")).toBeGreaterThan(answeredOn.indexOf("setup-sheet"));
 
     const answeredOff = setupPanelHtml({
       off: false, hidden: false, actions: [], steps: [step],
-      usageSharing: { answered: true, enabled: false, payload },
+      usageSharing: { answered: true, enabled: false, lastSentAt: null, payload },
     });
-    expect(answeredOff).toContain('aria-label="Share enabled addons" onchange');
+    expect(answeredOff).toContain('aria-label="Share addon usage" onchange');
 
     const fetches: { url: string; body: unknown; csrf: string | undefined }[] = [];
     const notices: { msg: string; kind: string }[] = [];
@@ -974,7 +980,7 @@ describe("Setup client and route contracts", () => {
       },
     });
     expect(fetches[0]).toEqual({ url: "/addons/api/usage-sharing", body: { enabled: true }, csrf: "tok" });
-    expect(notices[0]).toEqual({ msg: "Sharing enabled addons once a week.", kind: "ok" });
+    expect(notices[0]).toEqual({ msg: "The daily update check now shares addon usage.", kind: "ok" });
 
     shouldFail = true;
     const toggle = { checked: false, disabled: false };

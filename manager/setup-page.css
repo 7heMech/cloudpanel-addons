@@ -211,6 +211,7 @@ html.dark #setup-page-root {
 .setup-share-line summary { display: inline; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .setup-share-line summary:hover { color: var(--accent); }
 .setup-share-line details[open] .setup-share-payload { margin-top: 6px; }
+.setup-share-line details p { margin: 6px 0 0; }
 
 /* Cross-addon Guides directory below the Setup card. */
 .setup-guides { margin-top: 32px; }

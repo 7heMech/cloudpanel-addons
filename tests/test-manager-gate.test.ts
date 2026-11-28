@@ -38,8 +38,10 @@ mock.module("./lib/sso-auth.ts", () => ({
       : { auth: null, response: new Response(null, { status: 302, headers: { Location: "/login" } }) };
   },
 }));
+const realUpdateCheck = await import("./lib/update-check.ts");
 mock.module("./lib/update-check.ts", () => ({
-  checkCliUpdate: async () => { reached.push("update-check"); return null; },
+  ...realUpdateCheck,
+  savedUpdate: () => { reached.push("update-check"); return null; },
 }));
 const realGateway = await import("./lib/gateway-client.ts");
 mock.module("./lib/gateway-client.ts", () => ({
@@ -316,7 +318,8 @@ mock.module("./lib/sso-auth.ts", () => ({
   ...realSso,
   authenticateRequest: async () => ({ auth: null, response: realSso.redirectToLogin() }),
 }));
-mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
+const realUpdateCheck = await import("./lib/update-check.ts");
+mock.module("./lib/update-check.ts", () => ({ ...realUpdateCheck, savedUpdate: () => null }));
 
 let calls = 0;
 const realGateway = await import("./lib/gateway-client.ts");
@@ -408,7 +411,8 @@ mock.module("./lib/sso-auth.ts", () => ({
   ...realSso,
   authenticateRequest: async () => ({ auth: null, response: realSso.redirectToLogin() }),
 }));
-mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
+const realUpdateCheck = await import("./lib/update-check.ts");
+mock.module("./lib/update-check.ts", () => ({ ...realUpdateCheck, savedUpdate: () => null }));
 const asked = [];
 const realGateway = await import("./lib/gateway-client.ts");
 mock.module("./lib/gateway-client.ts", () => ({

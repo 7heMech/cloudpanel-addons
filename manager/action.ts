@@ -46,7 +46,8 @@ import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 import type { PanelHold } from "../lib/panel-holds";
 import { changeSetupPrefs, setupStepIds, setupView, type SetupChange } from "./setup";
 import { PANEL_USER_NAME_RE } from "../lib/panel-users";
-import { saveUsageSharing, shareUsageIfDue, usagePayload, usageSharingStatus, type UsagePayload } from "../lib/usage-share";
+import { readUsageSharing, saveUsageSharing, sendForget, settleActivity, usageReport, usageSharingStatus } from "../lib/usage-share";
+import { runDailyCheck } from "../lib/update-check";
 
 const MANAGER_STATE_DIR = addonStateDir("manager");
 const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
@@ -196,13 +197,22 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
   });
 }
 
-export function currentUsagePayload(): UsagePayload {
-  return usagePayload(ADDON_NAMES.filter(enabled));
+export function enabledAddonNames(): string[] {
+  return ADDON_NAMES.filter(enabled);
 }
 
-/** Best-effort, after a repair or a toggle; sends only when root opted in. */
-export async function shareCurrentUsage(): Promise<void> {
-  await shareUsageIfDue(currentUsagePayload);
+/**
+ * The once-a-day update check, with the opt-in part while root said yes, and
+ * a deletion an opt-out still owes. Never throws.
+ */
+export async function dailyCheck(): Promise<void> {
+  try {
+    if (readUsageSharing().forget) await sendForget();
+  } catch {}
+  await runDailyCheck({
+    usage: () => usageReport(enabledAddonNames()),
+    onUsageSaved: (sent) => settleActivity(sent.activity),
+  });
 }
 
 function withManagerLock<T>(lockDir: string, onTimeout: string, body: () => Promise<T>): Promise<T> {
@@ -501,9 +511,10 @@ export async function runManagerAction(
       case "usage-sharing": {
         if (flags.enabled !== undefined) {
           if (flags.enabled !== "true" && flags.enabled !== "false") return failReply("'usage-sharing' takes --enabled=true|false", undefined, options.emitReply !== false);
-          saveUsageSharing(flags.enabled === "true");
+          const { forget } = saveUsageSharing(flags.enabled === "true");
+          if (forget) await sendForget();
         }
-        return reply({ ok: true, data: usageSharingStatus(currentUsagePayload()) }, options.emitReply !== false);
+        return reply({ ok: true, data: usageSharingStatus(enabledAddonNames()) }, options.emitReply !== false);
       }
       case "watch-job": {
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;

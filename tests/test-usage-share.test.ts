@@ -1,263 +1,149 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  countAction,
+  FORGET_URL,
   formatUsageSharingStatus,
-  isoWeek,
-  payloadHash,
+  ID_PLACEHOLDER,
+  MAX_ACTION_COUNT,
+  readActivity,
   readUsageSharing,
   saveUsageSharing,
-  shareUsageIfDue,
-  USAGE_URL,
-  usagePayload,
+  sendForget,
+  settleActivity,
+  usageReport,
   usageSharingStatus,
-  type UsagePayload,
 } from "../lib/usage-share";
+import { countedActions } from "../lib/usage-actions";
+import { ADDON_NAMES } from "../addons/catalog";
 import { csrfCookieHeader, newCsrfToken } from "../lib/app-http";
 import { handleManagerRoute } from "../manager/index";
 
 const uid = process.getuid!();
 let dir: string;
+let paths: { file: string; uid: number };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "clp-usage-share-"));
+  paths = { file: join(dir, "usage-sharing.json"), uid };
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("usage payload", () => {
-  test("contains only the four documented fields, normalized and sorted", () => {
-    const payload = usagePayload(["wp-tools", "dns", "firewall"], "v2.1.0", "2.5.4-3+clp-bookworm", "x64");
-    expect(Object.keys(payload).sort()).toEqual(["addons", "arch", "cloudpanel", "version"]);
-    expect(payload).toEqual({
-      version: "2.1.0",
-      cloudpanel: "2.5.4",
-      arch: "x64",
-      addons: ["dns", "firewall", "wp-tools"],
-    });
-  });
-
-  test("records null cloudpanel when dpkg cannot report a version", () => {
-    expect(usagePayload([], "2.1.0", null, "arm64")).toEqual({
-      version: "2.1.0",
-      cloudpanel: null,
-      arch: "arm64",
-      addons: [],
-    });
+describe("counted actions", () => {
+  test("are web verbs of catalog addons, without streams, job polling or the manager", () => {
+    const actions = countedActions();
+    expect(Object.keys(actions).every((addon) => ADDON_NAMES.includes(addon))).toBe(true);
+    expect(actions.manager).toBeUndefined();
+    expect(actions.dns).toContain("save-profile");
+    expect(actions.git).toContain("deploy");
+    expect(actions.git).not.toContain("job");
+    expect(actions.git).not.toContain("watch-job");
+    expect(actions.git).not.toContain("run");
   });
 });
 
-describe("ISO week calculation", () => {
-  test("handles mid-year dates and ISO year boundaries", () => {
-    expect(isoWeek(new Date("2026-11-26T10:00:00Z"))).toBe("2026-W48");
-    expect(isoWeek(new Date("2026-01-01T00:00:00Z"))).toBe("2026-W01");
-    expect(isoWeek(new Date("2025-12-29T00:00:00Z"))).toBe("2026-W01");
-    expect(isoWeek(new Date("2021-01-01T00:00:00Z"))).toBe("2020-W53");
-  });
-});
+describe("opting in and out", () => {
+  test("starts unanswered; yes makes a random ID in a 0600 file; no drops it and queues its deletion", () => {
+    expect(readUsageSharing(paths)).toEqual({ answered: false, enabled: false, id: null, forget: null, lastSentAt: null });
+    const on = saveUsageSharing(true, paths);
+    expect(on.id).toMatch(/^[0-9a-f]{32}$/);
+    expect(statSync(paths.file).mode & 0o777).toBe(0o600);
+    expect(saveUsageSharing(true, paths).id).toBe(on.id);
 
-describe("state persistence", () => {
-  test("defaults to unanswered and disabled when no file exists", () => {
-    const file = join(dir, "usage-sharing.json");
-    expect(readUsageSharing(file, uid)).toEqual({
-      answered: false,
-      enabled: false,
-      lastSentAt: null,
-      lastSentWeek: null,
-      lastSentHash: null,
-    });
-  });
-
-  test("saves a 0600 file and keeps prior send markers across toggles", () => {
-    const file = join(dir, "usage-sharing.json");
-    saveUsageSharing(true, file, uid);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readUsageSharing(file, uid)).toEqual({
-      answered: true,
-      enabled: true,
-      lastSentAt: null,
-      lastSentWeek: null,
-      lastSentHash: null,
-    });
-
-    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    raw.lastSentAt = "2026-11-26T10:00:00.000Z";
-    raw.lastSentWeek = "2026-W48";
-    raw.lastSentHash = "abc";
-    writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
-
-    saveUsageSharing(false, file, uid);
-    expect(readUsageSharing(file, uid)).toEqual({
-      answered: true,
-      enabled: false,
-      lastSentAt: "2026-11-26T10:00:00.000Z",
-      lastSentWeek: "2026-W48",
-      lastSentHash: "abc",
-    });
+    const off = saveUsageSharing(false, paths);
+    expect(off).toEqual({ answered: true, enabled: false, id: null, forget: on.id, lastSentAt: null });
+    const again = saveUsageSharing(true, paths);
+    expect(again.id).not.toBe(on.id);
+    expect(again.forget).toBe(on.id);
   });
 
   test("refuses loose permissions and symlinks", () => {
-    const file = join(dir, "usage-sharing.json");
-    saveUsageSharing(true, file, uid);
-    chmodSync(file, 0o644);
-    expect(() => readUsageSharing(file, uid)).toThrow("refusing untrusted state");
-
+    saveUsageSharing(true, paths);
+    chmodSync(paths.file, 0o644);
+    expect(() => readUsageSharing(paths)).toThrow("refusing untrusted state");
+    chmodSync(paths.file, 0o600);
     const link = join(dir, "link.json");
-    symlinkSync(file, link);
-    expect(() => readUsageSharing(link, uid)).toThrow("refusing untrusted state");
+    symlinkSync(paths.file, link);
+    expect(() => readUsageSharing({ file: link, uid })).toThrow("refusing untrusted state");
+  });
+
+  test("the deletion is sent by ID and cleared only once the Worker confirms it", async () => {
+    const id = saveUsageSharing(true, paths).id;
+    saveUsageSharing(false, paths);
+    const calls: { url: string; body: unknown }[] = [];
+    let status = 502;
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status });
+    }) as unknown as typeof fetch;
+    expect(await sendForget({ ...paths, fetch: fetcher })).toBe(false);
+    expect(readUsageSharing(paths).forget).toBe(id);
+    status = 200;
+    expect(await sendForget({ ...paths, fetch: fetcher })).toBe(true);
+    expect(calls).toEqual([{ url: FORGET_URL, body: { id } }, { url: FORGET_URL, body: { id } }]);
+    expect(readUsageSharing(paths).forget).toBeNull();
+    expect(await sendForget({ ...paths, fetch: fetcher })).toBe(true);
+    expect(calls).toHaveLength(2);
   });
 });
 
-describe("shareUsageIfDue", () => {
-  const basePayload: UsagePayload = {
-    version: "2.1.0",
-    cloudpanel: "2.5.4",
-    arch: "x64",
-    addons: ["dns", "system-tweaks"],
-  };
+describe("activity counts", () => {
+  test("count only allowlisted actions, only while sharing is on, clamped", async () => {
+    await countAction("dns", "list", paths);
+    expect(existsSync(`${paths.file}.activity`)).toBe(false);
 
-  test("never sends while unanswered or disabled", async () => {
-    const file = join(dir, "usage-sharing.json");
-    let called = 0;
-    const mockFetch = (async () => {
-      called++;
-      return new Response(null, { status: 204 });
-    }) as unknown as typeof fetch;
+    saveUsageSharing(true, paths);
+    await countAction("dns", "list", paths);
+    await countAction("dns", "list", paths);
+    await countAction("git", "job", paths);
+    await countAction("dns", "example.com", paths);
+    await countAction("manager", "enable", paths);
+    await countAction("constructor", "list", paths);
+    expect(readActivity(paths)).toEqual({ dns: { list: 2 } });
+    expect(statSync(`${paths.file}.activity`).mode & 0o777).toBe(0o600);
 
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, fetch: mockFetch })).toBe(false);
-    expect(called).toBe(0);
-
-    saveUsageSharing(false, file, uid);
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, fetch: mockFetch })).toBe(false);
-    expect(called).toBe(0);
+    for (let i = 0; i < 3; i++) await countAction("firewall", "set", paths);
+    expect(readActivity(paths).firewall).toEqual({ set: 3 });
+    expect(MAX_ACTION_COUNT).toBe(10_000);
   });
 
-  test("posts the exact four-field payload, deduplicates within an ISO week, and resends on payload or week change", async () => {
-    const file = join(dir, "usage-sharing.json");
-    saveUsageSharing(true, file, uid);
+  test("a send takes off what it carried and keeps what ran meanwhile; opting out deletes them", async () => {
+    saveUsageSharing(true, paths);
+    for (let i = 0; i < 3; i++) await countAction("dns", "list", paths);
+    const report = usageReport(["firewall", "dns"], paths, "2.5.4-3+clp-bookworm")!;
+    expect(report).toEqual({ id: readUsageSharing(paths).id!, cloudpanel: "2.5.4", addons: ["dns", "firewall"], activity: { dns: { list: 3 } } });
+    await countAction("dns", "list", paths);
+    await countAction("smtp", "test", paths);
+    settleActivity(report.activity, new Date("2026-11-28T00:05:00Z"), paths);
+    expect(readActivity(paths)).toEqual({ dns: { list: 1 }, smtp: { test: 1 } });
+    expect(readUsageSharing(paths).lastSentAt).toBe("2026-11-28T00:05:00.000Z");
 
-    const requests: { url: string; method: string; headers: Record<string, string>; body: string }[] = [];
-    const mockFetch = (async (url: string, init?: RequestInit) => {
-      requests.push({
-        url,
-        method: init?.method ?? "GET",
-        headers: (init?.headers ?? {}) as Record<string, string>,
-        body: String(init?.body ?? ""),
-      });
-      return new Response(null, { status: 204 });
-    }) as unknown as typeof fetch;
-
-    const week48 = new Date("2026-11-26T10:00:00Z");
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, now: week48, fetch: mockFetch })).toBe(true);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]!.url).toBe(USAGE_URL);
-    expect(requests[0]!.method).toBe("POST");
-    expect(requests[0]!.headers).toEqual({
-      "Content-Type": "application/json",
-      "User-Agent": "clp-addons/2.1.0",
-    });
-    expect(JSON.parse(requests[0]!.body)).toEqual(basePayload);
-
-    const saved = readUsageSharing(file, uid);
-    expect(saved.lastSentAt).toBe(week48.toISOString());
-    expect(saved.lastSentWeek).toBe("2026-W48");
-    expect(saved.lastSentHash).toBe(payloadHash(basePayload));
-    expect(requests[0]!.body).not.toContain(saved.lastSentHash!);
-
-    // Same week and same payload: skipped.
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, now: new Date("2026-11-27T12:00:00Z"), fetch: mockFetch })).toBe(false);
-    expect(requests).toHaveLength(1);
-
-    // Same week but enabled addons changed: sent again.
-    const changedPayload: UsagePayload = { ...basePayload, addons: ["dns", "firewall", "system-tweaks"] };
-    expect(await shareUsageIfDue(() => changedPayload, { file, uid, now: new Date("2026-11-27T13:00:00Z"), fetch: mockFetch })).toBe(true);
-    expect(requests).toHaveLength(2);
-    expect(JSON.parse(requests[1]!.body)).toEqual(changedPayload);
-
-    // Next ISO week with unchanged payload: sent again.
-    const week49 = new Date("2026-12-01T08:00:00Z");
-    expect(await shareUsageIfDue(() => changedPayload, { file, uid, now: week49, fetch: mockFetch })).toBe(true);
-    expect(requests).toHaveLength(3);
-    expect(readUsageSharing(file, uid).lastSentWeek).toBe("2026-W49");
-  });
-
-  test("silently ignores fetch errors and non-2xx responses without updating state", async () => {
-    const file = join(dir, "usage-sharing.json");
-    saveUsageSharing(true, file, uid);
-
-    const failingFetch = (async () => {
-      throw new Error("network down");
-    }) as unknown as typeof fetch;
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, fetch: failingFetch })).toBe(false);
-    expect(readUsageSharing(file, uid).lastSentAt).toBeNull();
-
-    const errorStatusFetch = (async () => new Response("error", { status: 503 })) as unknown as typeof fetch;
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, fetch: errorStatusFetch })).toBe(false);
-    expect(readUsageSharing(file, uid).lastSentAt).toBeNull();
-  });
-
-  test("does not re-enable sharing if root turned it off while a send was in flight", async () => {
-    const file = join(dir, "usage-sharing.json");
-    const lockFile = join(dir, "usage-sharing.lock");
-    saveUsageSharing(true, file, uid, lockFile);
-
-    const mockFetch = (async () => {
-      // Network request runs outside the lock, so a concurrent consent save does not block on fetch.
-      saveUsageSharing(false, file, uid, lockFile);
-      return new Response(null, { status: 204 });
-    }) as unknown as typeof fetch;
-
-    expect(await shareUsageIfDue(() => basePayload, { file, lockFile, uid, fetch: mockFetch })).toBe(true);
-    expect(readUsageSharing(file, uid).enabled).toBe(false);
-    expect(readUsageSharing(file, uid).lastSentAt).toBeNull();
-  });
-
-  test("serializes completion writes with a concurrent consent change holding the lock", async () => {
-    const { acquireFileLockSync } = await import("../lib/file-lock");
-    const file = join(dir, "usage-sharing-locked.json");
-    const lockFile = join(dir, "usage-sharing-locked.lock");
-    saveUsageSharing(true, file, uid, lockFile);
-
-    let hold: ReturnType<typeof acquireFileLockSync> | null = null;
-    const mockFetch = (async () => {
-      // Hold the lock as another process would while it updates consent to false.
-      hold = acquireFileLockSync(lockFile, 5, "busy");
-      setTimeout(() => {
-        writeFileSync(file, JSON.stringify({ answered: true, enabled: false, lastSentAt: null, lastSentWeek: null, lastSentHash: null }), { mode: 0o600 });
-        hold?.release();
-      }, 40);
-      return new Response(null, { status: 204 });
-    }) as unknown as typeof fetch;
-
-    expect(await shareUsageIfDue(() => basePayload, { file, lockFile, uid, fetch: mockFetch })).toBe(true);
-    expect(readUsageSharing(file, uid).enabled).toBe(false);
-    expect(readUsageSharing(file, uid).lastSentAt).toBeNull();
+    saveUsageSharing(false, paths);
+    expect(existsSync(`${paths.file}.activity`)).toBe(false);
+    expect(usageReport(["dns"], paths)).toBeNull();
   });
 });
 
-describe("status formatting and manager route validation", () => {
-  const payload: UsagePayload = { version: "2.1.0", cloudpanel: "2.5.4", arch: "x64", addons: ["dns"] };
-
-  test("prints state and exact JSON payload", () => {
-    const file = join(dir, "usage-sharing.json");
-    const unanswered = formatUsageSharingStatus(payload, file, uid);
-    expect(unanswered).toContain("Usage sharing: off (not answered yet)");
-    expect(unanswered).toContain(JSON.stringify(payload, null, 2));
-
-    saveUsageSharing(true, file, uid);
-    expect(usageSharingStatus(payload, file, uid)).toEqual({
-      answered: true,
-      enabled: true,
-      lastSentAt: null,
-      payload,
+describe("status and manager route", () => {
+  test("shows the daily check's body, with a placeholder ID until sharing is on", () => {
+    const off = usageSharingStatus(["dns"], paths, "2.5.4", "2.2.0", "x64");
+    expect(off.payload).toEqual({
+      version: "2.2.0", channel: "stable", arch: "x64",
+      usage: { id: ID_PLACEHOLDER, cloudpanel: "2.5.4", addons: ["dns"], activity: {} },
     });
-    expect(formatUsageSharingStatus(payload, file, uid)).toContain("Usage sharing: on");
+    expect(formatUsageSharingStatus(["dns"], paths)).toContain("Usage sharing: off (not answered yet)");
 
-    saveUsageSharing(false, file, uid);
-    expect(formatUsageSharingStatus(payload, file, uid)).toContain("Usage sharing: off\nPayload:");
+    const { id } = saveUsageSharing(true, paths);
+    const on = usageSharingStatus(["dns"], paths, null, "2.2.0-rc.3", "arm64");
+    expect(on).toMatchObject({ answered: true, enabled: true, payload: { version: "2.2.0-rc.3", channel: "prerelease", arch: "arm64", usage: { id, cloudpanel: null } } });
+    const text = formatUsageSharingStatus(["dns"], paths);
+    expect(text).toContain("Usage sharing: on");
+    expect(text).toContain(id!);
   });
 
   test("POST /addons/api/usage-sharing enforces CSRF and validates boolean enabled", async () => {

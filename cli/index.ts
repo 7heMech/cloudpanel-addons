@@ -20,9 +20,9 @@ import { withOperationLockSync } from "../lib/operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { runAuthActionStdin } from "./auth-action";
-import { currentUsagePayload, runManagerAction, type ManagerOps } from "../manager/action";
+import { enabledAddonNames, runManagerAction, type ManagerOps } from "../manager/action";
 import { switchSetup } from "../manager/setup";
-import { formatUsageSharingStatus, saveUsageSharing } from "../lib/usage-share";
+import { formatUsageSharingStatus, saveUsageSharing, sendForget } from "../lib/usage-share";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 
@@ -130,14 +130,14 @@ function cmdSetup(argv: string[]): void {
   else log.ok(on ? "Setup is on: administrators see its suggestions and Action needed again" : "Setup is off: nothing is checked and no page shows it");
 }
 
-function cmdShareUsage(argv: string[]): void {
+async function cmdShareUsage(argv: string[]): Promise<void> {
   const [state, ...extra] = argv;
   if (extra.length || (state !== "on" && state !== "off" && state !== "status")) {
     fatal("usage: clp-addons share-usage on|off|status");
   }
   if (state === "status") {
     try {
-      log.plain(formatUsageSharingStatus(currentUsagePayload()));
+      log.plain(formatUsageSharingStatus(enabledAddonNames()));
     } catch (error) {
       fatal(errorMessage(error));
     }
@@ -145,14 +145,15 @@ function cmdShareUsage(argv: string[]): void {
   }
   requireRoot("share-usage");
   const enabled = state === "on";
+  let forget: string | null = null;
   try {
-    saveUsageSharing(enabled);
+    ({ forget } = saveUsageSharing(enabled));
   } catch (error) {
     fatal(errorMessage(error));
   }
-  log.ok(enabled
-    ? "Usage sharing is on: enabled addons will be shared once a week"
-    : "Usage sharing is off: nothing will be shared");
+  if (enabled) return log.ok("Usage sharing is on: the daily update check also sends the usage shown by clp-addons share-usage status");
+  if (!forget || await sendForget()) return log.ok("Usage sharing is off: what this server sent is deleted");
+  log.warn("Usage sharing is off; deleting what this server sent failed and is retried with the daily check");
 }
 
 async function cmdOverview(): Promise<void> {
@@ -211,7 +212,7 @@ async function main(): Promise<number> {
       return 0;
     case "status": await cmdStatus(); return 0;
     case "setup": cmdSetup(rest); return 0;
-    case "share-usage": cmdShareUsage(rest); return 0;
+    case "share-usage": await cmdShareUsage(rest); return 0;
     case "self-uninstall": cmdSelfUninstall(rest); return 0;
     case "lock": cmdLock(rest, true); return 0;
     case "unlock": cmdLock(rest, false); return 0;

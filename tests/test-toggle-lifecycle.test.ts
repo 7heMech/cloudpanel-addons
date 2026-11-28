@@ -140,7 +140,6 @@ mock.module("./lib/sso-auth.ts", () => ({
   authenticateRequest: async () => ({ response: null }),
   panelUserUid: () => 1000,
 }));
-mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 
 const cli = await import("./cli/toggle.ts");
 let error;

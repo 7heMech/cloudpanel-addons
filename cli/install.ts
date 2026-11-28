@@ -3,7 +3,7 @@ import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
 import { type AddonSpec } from "../lib/addon-definition";
-import { recordNewsSince } from "../manager/action";
+import { dailyCheck, recordNewsSince } from "../manager/action";
 import { withOperationLock } from "../lib/operation-lock";
 import { ARTIFACT_MANIFEST_PATH } from "../lib/paths";
 import { lstatSync } from "node:fs";
@@ -49,6 +49,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
       log.plain("System Tweaks is recommended: it applies the security fixes. Enable it on the Addons page or with: clp-addons enable system-tweaks");
     }
     log.plain(`Dashboard URL: ${dashboardUrl()}`);
+    await dailyCheck();
   });
 }
 

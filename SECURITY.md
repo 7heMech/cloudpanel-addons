@@ -114,6 +114,20 @@ the binary (unless `--skip-attestation` is passed). It also hard-links the
 previous binary aside so a failed update or restart rolls back automatically.
 [Release verification](docs/decisions/releases.md)
 
+### What does it send, and to whom?
+
+Once a day each server asks `clp.7he.dev`, a Cloudflare Worker this project
+runs, whether to update, sending its version, release channel and architecture.
+Only blocking that host stops it; the check then falls back to GitHub. The
+Worker counts servers with a hash of the address under a random key that changes
+every UTC day and is deleted after two days; it keeps no address and no stable
+hash. Sharing addon usage is off until root turns it on, and then adds a random
+ID, the enabled addons, the CloudPanel version and how often each addon action
+ran. Cloudflare adds the country and network operator. No domains, site names,
+user names or addresses are sent, nothing is shared with third parties, and
+turning sharing off deletes that ID's data.
+[Update checks and usage sharing](docs/decisions/releases.md#daily-update-check)
+
 ### Can I uninstall, and what happens when CloudPanel updates?
 
 Every CloudPanel template and master vhost edit saves a pristine baseline copy

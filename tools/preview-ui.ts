@@ -69,6 +69,7 @@ import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
 import { setupPanelHtml, setupShows } from "../manager/setup-view";
 import { applyRequestOrigin, type ActionItem, type SetupItem, type SetupView } from "../manager/setup";
+import { ID_PLACEHOLDER } from "../lib/usage-share";
 import { ADDONS } from "../addons/catalog";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
@@ -2088,13 +2089,22 @@ function setupPreviewView(page: URLSearchParams, trackShareParam = true): SetupV
           ? { answered: true, enabled: true }
           : { answered: false, enabled: false };
   const shareState = setupPreviewPrefs.usageSharing ?? initialShare;
+  const activity: Record<string, Record<string, number>> = shareState.enabled
+    ? { dns: { assign: 2, list: 14 }, firewall: { list: 6, set: 1 }, "system-tweaks": { state: 9 } }
+    : {};
   const usageSharing = {
     ...shareState,
+    lastSentAt: shareState.enabled ? "2026-11-28T00:07:12.000Z" : null,
     payload: {
-      version: "2.1.0",
-      cloudpanel: "2.5.4",
+      version: "2.2.0",
+      channel: "stable" as const,
       arch: "x64",
-      addons: [...enabledAddons].sort(),
+      usage: {
+        id: shareState.enabled ? "3f9c1e7a2b6d4058a1c9e0f7b2d4a6c8" : ID_PLACEHOLDER,
+        cloudpanel: "2.5.4",
+        addons: [...enabledAddons].sort(),
+        activity,
+      },
     },
   };
   const enabledSet = new Set(enabledAddons);
@@ -2147,7 +2157,7 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     setupPreviewPrefs.usageSharingParam = page.get("share");
     setupPreviewPrefs.usageSharing = { answered: true, enabled: body.enabled };
     const view = setupPreviewView(page);
-    return Response.json({ ok: true, data: { ...setupPreviewPrefs.usageSharing, lastSentAt: null, payload: view.usageSharing?.payload } });
+    return Response.json({ ok: true, data: view.usageSharing });
   }
   if (url.pathname !== "/addons/api/setup") return null;
   if (req.method === "POST") {
