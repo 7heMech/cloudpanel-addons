@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { executeDnsAction, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { dashboardContent } from "../addons/dns/app/views";
 import type { PanelSite } from "../addons/dns/engine";
-import { composeProfiles, MAX_PROFILES, parsePolicy, parseProfile } from "../addons/dns/model";
+import { composeProfiles, MAX_DOMAINS, MAX_PROFILES, parsePolicy, parseProfile } from "../addons/dns/model";
 import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
 import { renderProfile } from "../addons/dns/records";
 import { readEdgeConfig } from "../addons/firewall/edge";
@@ -973,5 +973,32 @@ describe("review regressions", () => {
     });
     expect(policy.domains).toEqual(["old.example.org"]);
     expect(policy.assignments).toEqual({ "example.com": { http: "web", mail: null }, "old.example.org": { http: null, mail: "google" } });
+  });
+
+  test("a v2 leftover's Mail role is imported once: removing its domain sticks, and the redirect stays for Redirects' migration", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("set-automatic", { automatic: false });
+    const policyPath = join(env.dir, "state", "policy.json");
+    const saved = JSON.parse(readFileSync(policyPath, "utf8"));
+    const leftover = { source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "google" };
+    rmSync(policyPath);
+    writeFileSync(policyPath, JSON.stringify({ ...saved, redirects: [leftover] }), { mode: 0o600 });
+    expect((await env.act("list")).sites.find((s) => s.domain === "old.example.org")).toMatchObject({ type: "domain", mailProfileId: "google" });
+
+    const removed = await env.act("remove-domain", { domain: "old.example.org" });
+    expect(removed.sites.some((s) => s.domain === "old.example.org")).toBe(false);
+    expect((await env.act("list")).sites.some((s) => s.domain === "old.example.org")).toBe(false);
+    const onDisk = JSON.parse(readFileSync(policyPath, "utf8"));
+    const { mailProfileId: _imported, ...kept } = leftover;
+    expect(onDisk.redirects).toEqual([kept]);
+    expect(onDisk.domains).toEqual([]);
+  });
+
+  test("v2 leftovers' Mail roles that do not fit in the DNS-only domains stop the read rather than being dropped", () => {
+    const listed = Array.from({ length: MAX_DOMAINS }, (_, index) => `d${index}.example.net`);
+    const leftover = { source: "old.example.org", target: "https://example.com", mailProfileId: "google" };
+    expect(() => parsePolicy({ ...seededPolicy(), domains: listed, redirects: [leftover] })).toThrow("do not fit");
+    expect(parsePolicy({ ...seededPolicy(), domains: listed.slice(1), redirects: [leftover] }).domains).toContain("old.example.org");
   });
 });

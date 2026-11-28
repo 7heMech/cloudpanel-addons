@@ -799,10 +799,11 @@ export function parsePolicy(value: unknown): Policy {
       const item = entry as Record<string, unknown>;
       const source = safeHostname(item.source);
       const mail = typeof item.mailProfileId === "string" && mailIds.has(item.mailProfileId) ? item.mailProfileId : null;
-      if (!source || !mail || domains.size >= MAX_DOMAINS) continue;
+      if (!source || !mail) continue;
       if (!assignments[source]) assignments[source] = { http: null, mail };
       if (assignments[source]!.mail) domains.add(source);
     }
+    if (domains.size > MAX_DOMAINS) failAction(`the redirects' Mail roles do not fit in ${MAX_DOMAINS} DNS-only domains`);
     const heldRaw = Array.isArray(raw.held) ? raw.held : [];
     const held = [...new Set(heldRaw.filter((domain): domain is string => typeof domain === "string" && Boolean(assignments[domain])))];
     const defaultHttp = typeof raw.defaultHttpProfileId === "string" && httpIds.has(raw.defaultHttpProfileId)

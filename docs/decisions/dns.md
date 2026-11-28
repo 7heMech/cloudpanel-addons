@@ -321,8 +321,11 @@ importing the addon and whether or not Redirects is enabled, for two things:
 Upgrading turns each redirect that had a mail profile into a DNS-only domain
 with that Mail role, through DNS's own `upgradeSavedPolicy` (which the Redirects
 migration is handed so it never imports DNS); v2 leftovers with a
-`mailProfileId` are read the same way. Until that migration has run, a DNS save
-keeps `redirects` in `policy.json` for it to read.
+`mailProfileId` are read the same way, and a policy whose leftovers would
+take the DNS-only domains past `MAX_DOMAINS` fails to read rather than drop
+one. Until that migration has run, a DNS save keeps `redirects` in
+`policy.json` for it to read, without the Mail roles the save already holds,
+so each is imported once.
 
 ## Panel hostname
 
