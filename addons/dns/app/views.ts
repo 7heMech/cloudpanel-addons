@@ -138,7 +138,7 @@ function siteRow(site: SiteView, state: DnsState, httpProfiles: Profile[], mailP
   const mailWarn = site.mailcowMissing ? '<span class="badge tone-warn dns-mailcow-warn">Mailcow unlinked</span>' : "";
   // A redirect domain's HTTP role is Redirects'; DNS keeps only its Mail role.
   const httpCell = site.redirect
-    ? `<a class="dns-redirect-role" href="${mountPath("redirects")}/" title="Managed in Redirects">${HTTP_ROLE_LABELS.redirect}</a><span class="hint dns-clamp" title="${esc(site.redirect.target)}">→ ${esc(site.redirect.target.replace(/^https?:\/\//, ""))}</span>`
+    ? `<a class="dns-redirect-role" href="${mountPath("redirects")}/" title="Managed in Redirects">${HTTP_ROLE_LABELS.redirect}</a><span class="hint dns-clamp" title="${esc(site.redirect.target)}">→&nbsp;${esc(site.redirect.target.replace(/^https?:\/\//, ""))}</span>`
     : `<select class="dns-role-select${site.httpProfileId ? "" : " dns-role-default"}" aria-label="HTTP role for ${esc(site.domain)}" onchange="dnsAssignHttp(this)">${profileOptions(httpProfiles, site.httpProfileId, HTTP_NONE)}</select>`;
   return `<tr data-domain="${esc(site.domain)}" data-http-profile-id="${esc(site.httpProfileId ?? "")}" data-mail-profile-id="${esc(site.mailProfileId ?? "")}" data-show="${show}"${sorts}${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
